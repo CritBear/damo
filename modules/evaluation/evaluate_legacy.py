@@ -1,27 +1,14 @@
 import sys
 import numpy as np
 import pickle
-import torch
 from tqdm import tqdm
 from scipy.signal import savgol_filter
 from scipy.spatial.transform import Rotation as R
 
 from modules.utils.paths import Paths
 from modules.evaluation.score_manager import ScoreManager
-from human_body_prior.body_model.lbs import batch_rodrigues
 from modules.solver.quat_pose_solver_numpy import PoseSolver
 from modules.utils.viewer.vpython_viewer import VpythonViewer as Viewer
-
-
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-
-def to_cpu(tensor):
-    return tensor.detach().cpu().numpy()
-
-
-def to_gpu(ndarray):
-    return torch.Tensor(ndarray).to(device)
 
 
 def evaluate():
@@ -97,7 +84,7 @@ def evaluate_entry(test_data_path, model_name, body_shape_indices):
 
         with open(Paths.support_data / 'fixed_synthetic_generation.pkl', 'rb') as f:
             fixed_synthetic = pickle.load(f)
-
+            
         figure_data = {
             'marker_positions': [],  # [ (n_frames, n_max_markers, 3) ]
             'body_shape_index': [],  # [ int ]
@@ -108,7 +95,7 @@ def evaluate_entry(test_data_path, model_name, body_shape_indices):
             'weight': [],  # [ (n_frames, n_max_markers, n_joints + 1) ]
             'offset': [],  # [ (n_frames, n_max_markers, n_joints + 1, 3) ]
         }
-
+        
     for motion_idx in range(len(test_data)):
         if body_shape_indices is None:
             body_shape_idx = 0
@@ -123,36 +110,37 @@ def evaluate_entry(test_data_path, model_name, body_shape_indices):
         print(f"Solving... motion clip:[{motion_idx + 1}/{len(test_data)}]")
 
         motion = test_data[motion_idx]
-        points = to_gpu(motion['points'])  # (n_frames, n_max_markers, 3)
-        indices = to_gpu(motion['indices'])  # (n_frames, n_max_markers, n_joints + 1)
-        j3_weight = to_gpu(motion['weight'])  # (n_frames, n_max_markers, 3)
-        j3_offset = to_gpu(motion['offset'])  # (n_frames, n_max_markers, 3, 3)
+        points = motion['points']  # (n_frames, n_max_markers, 3)
+        indices = motion['indices']  # (n_frames, n_max_markers, n_joints + 1)
+        j3_weight = motion['weight']  # (n_frames, n_max_markers, 3)
+        j3_offset = motion['offset']  # (n_frames, n_max_markers, 3, 3)
 
         n_frames = points.shape[0]
 
-        gt_jgp = to_gpu(motion['joint_global_positions'][0][:n_frames])  # (n_frames, n_joints, 3)
+        gt_jgp = motion['joint_global_positions'][0][:n_frames]  # (n_frames, n_joints, 3)
         # gt_jgr = clip['joint_global_rotations'][0][:n_frames]  # (n_frames, n_joints, 3, 3)
         # gt_jlp = motion['joint_local_positions'][0]# [-n_joints:]  # (n_joints, 3)
-        gt_jlr = to_gpu(motion['joint_local_rotations'][0][:n_frames])  # (n_frames, n_joints, 3, 3)
+        # print(gt_jlp.shape)
+        # return
+        gt_jlr = motion['joint_local_rotations'][0][:n_frames]  # (n_frames, n_joints, 3, 3)
 
-        j3_indices = torch.argsort(indices, dim=-1)[:, :, -1:-4:-1].to(torch.int32)
-        ja_weight = torch.zeros(n_frames, n_max_markers, n_joints + 1).to(device)
-        ja_offset = torch.zeros(n_frames, n_max_markers, n_joints + 1, 3).to(device)
+        j3_indices = np.argsort(indices)[:, :, -1:-4:-1]
+        ja_weight = np.zeros((n_frames, n_max_markers, n_joints + 1))
+        ja_offset = np.zeros((n_frames, n_max_markers, n_joints + 1, 3))
 
         ja_weight[
-            torch.arange(n_frames)[:, None, None],
-            torch.arange(n_max_markers)[:, None],
-            j3_indices
+            np.arange(n_frames)[:, np.newaxis, np.newaxis],
+            np.arange(n_max_markers)[:, np.newaxis],
+            j3_indices.astype(np.int32)
         ] = j3_weight
 
         ja_offset[
-            torch.arange(n_frames)[:, None, None],
-            torch.arange(n_max_markers)[:, None],
-            j3_indices
+            np.arange(n_frames)[:, np.newaxis, np.newaxis],
+            np.arange(n_max_markers)[:, np.newaxis],
+            j3_indices.astype(np.int32)
         ] = j3_offset
 
         solver = PoseSolver(topology=topology, gt_skeleton_template=None, max_iter=1)  # gt_jlp
-
         if solver.skeleton_template is None:
             skeleton_template = solver.build_skeleton_template(points=points, weight=ja_weight, offset=ja_offset)
 
@@ -188,21 +176,17 @@ def evaluate_entry(test_data_path, model_name, body_shape_indices):
         for j in range(n_joints):
             if position_smoothing:
                 for t_idx in range(3):
-                    filtered_jgt_seq[:, j, t_idx, 3] = savgol_filter(jgt_seq[:, j, t_idx, 3],
-                                                                     window_length=31 if n_frames > 30 else 5,
-                                                                     polyorder=2)
+                    filtered_jgt_seq[:, j, t_idx, 3] = savgol_filter(jgt_seq[:, j, t_idx, 3], window_length=31 if n_frames > 30 else 5, polyorder=2)
             if rotation_smoothing:
                 for p_idx in range(4):
-                    filtered_params_seq[:, j, p_idx] = savgol_filter(params_seq[:, j, p_idx], window_length=31,
-                                                                     polyorder=2)
+                    filtered_params_seq[:, j, p_idx] = savgol_filter(params_seq[:, j, p_idx], window_length=31, polyorder=2)
 
         if position_smoothing:
             jgt_seq = filtered_jgt_seq
         if rotation_smoothing:
             params_seq = filtered_params_seq
 
-        jlr_seq = R.from_quat(params_seq.reshape(n_frames * n_joints, 4)).as_matrix().reshape(
-            (n_frames, n_joints, 3, 3))
+        jlr_seq = R.from_quat(params_seq.reshape(n_frames * n_joints, 4)).as_matrix().reshape((n_frames, n_joints, 3, 3))
 
         print(jlr_seq.shape)
 
@@ -246,7 +230,7 @@ def evaluate_entry(test_data_path, model_name, body_shape_indices):
                 # joints_seq=jgt_seq[:, :, :3, 3],
                 # gt_joints_seq=gt_jgp[start_frame:start_frame + n_frames],
                 joints_seq=jlr_seq,
-                gt_joints_seq=gt_jlr[start_frame:start_frame + n_frames],
+                gt_joints_seq=gt_jlr[start_frame:start_frame+n_frames],
                 b_position=False,
                 skeleton_template=skeleton_template,
                 root_pos_seq=jgt_seq[:, 0, :3, 3],

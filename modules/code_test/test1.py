@@ -232,3 +232,12 @@ for i in d:
     #     }
     #
     #     return items
+
+# gc.collect()
+# torch.cuda.empty_cache()
+# cur_vram_memory = torch.cuda.memory_allocated()
+# max_vram_memory = torch.cuda.max_memory_allocated()
+# print(f'VRAM memory: {cur_vram_memory / (1024 ** 3):.2f} GB / {max_vram_memory / (1024 ** 3):.2f} GB')
+
+# assert npz_file.stem == c3d_file.stem + '_poses' or npz_file.stem == c3d_file.stem + '_stageii',\
+#     f'Index: {file_idx} | {npz_file.name}, {c3d_file.name}'

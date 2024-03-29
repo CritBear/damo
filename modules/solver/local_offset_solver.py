@@ -4,8 +4,99 @@ import numpy as np
 from human_body_prior.body_model.lbs import batch_rodrigues
 
 
+def solve_for_multiprocessing(
+        jgr, jgp, markers, j3_indices, j3_weights, init_params=None,
+        eps=1e-5, max_iter=10, mse_threshold=1e-4, u=1e-3, v=1.5
+):
+    n_markers, _ = markers.shape
+    if init_params is not None:
+        params = init_params.flatten().clone()
+    else:
+        params = torch.zeros(n_markers * 3 * 3).to(markers.device)
+
+    out_n = n_markers * 3
+    jacobian = torch.zeros([out_n, params.shape[0]]).to(markers.device)
+
+    last_update = 0
+    last_mse = 0
+
+    for i in range(max_iter):
+        params = torch.clamp(params, min=-2, max=2)
+
+        residual, mse = get_residual(jgr, jgp, params, markers, j3_indices, j3_weights, mse=True)
+
+        if abs(mse - last_mse) < mse_threshold:
+            return params, lbs(jgr, jgp, params, j3_indices, j3_weights), i, mse
+
+        for k in range(params.shape[0]):
+            jacobian[:, k] = get_derivative(k, jgr, jgp, params, j3_indices, j3_weights, eps)
+
+        jtj = torch.matmul(jacobian.T, jacobian)
+        jtj = jtj + u * torch.eye(jtj.shape[0]).to(markers.device)
+
+        update = last_mse - mse
+        delta = torch.matmul(
+            torch.matmul(torch.linalg.inv(jtj), jacobian.T), residual
+        ).ravel()
+        params -= delta
+
+        if update > last_update and update > 0:
+            u /= v
+        else:
+            u *= v
+
+        last_update = update
+        last_mse = mse
+
+    return params, lbs(jgr, jgp, params, j3_indices, j3_weights), max_iter, last_mse
+
+
+def get_residual(jgr, jgp, params, markers, j3_indices, j3_weights, mse=False):
+    virtual_markers = lbs(jgr, jgp, params, j3_indices, j3_weights)
+
+    residual = virtual_markers - markers
+
+    if mse:
+        residual_mse = torch.mean(torch.linalg.norm(residual, dim=-1)).item()
+        residual = residual.view(-1, 1)
+        return residual, residual_mse
+    else:
+        residual = residual.view(-1, 1)
+        return residual
+
+
+def get_derivative(k, jgr, jgp, params, j3_indices, j3_weights, eps):
+    params1 = params.clone()
+    params2 = params.clone()
+
+    params1[k] += eps
+    params2[k] -= eps
+
+    res1 = lbs(jgr, jgp, params1, j3_indices, j3_weights)
+    res2 = lbs(jgr, jgp, params2, j3_indices, j3_weights)
+
+    d = (res1 - res2) / (2 * eps)
+
+    return d.ravel()
+
+
+def lbs(jgr, jgp, params, j3_indices, j3_weights):
+    j3gr = jgr[j3_indices, :, :]  # [m, j3, 3, 3]
+    j3gp = jgp[j3_indices, :]  # [m, j3, 3]
+
+    # clamped_param = torch.clamp(params.view(-1, 3, 3), min=-2, max=2)
+
+    points = j3gr @ params.view(-1, 3, 3)[:, :, :, None]  # [m, j3, 3, 1]
+    points = points.squeeze()
+    points += j3gp  # [m, j3, 3]
+    points = torch.sum(points * j3_weights[:, :, None], dim=1)  # [m, 3]
+
+    return points
+
+
+
 class LocalOffsetSolver:
-    def __init__(self, topology, j3_indices, j3_weights, eps=1e-5, max_iter=15, mse_threshold=1e-4):
+    def __init__(self, topology, eps=1e-5, max_iter=15, mse_threshold=1e-4):
         self.topology = topology
         self.jgr = None
         self.jgp = None
@@ -14,8 +105,12 @@ class LocalOffsetSolver:
         self.max_iter = max_iter
         self.mse_threshold = mse_threshold
 
-    def set_transform(self, poses, jgp):
-        self.jgp = jgp
+    def set_transform(self, poses, jgp, device=None):
+
+        if device is None:
+            device = poses.device
+
+        self.jgp = jgp.to(device)
 
         poses_c = poses.clone().view(-1, self.n_joints, 3)
         jgr = batch_rodrigues(poses_c.view(-1, 3)).view(-1, self.n_joints, 3, 3)
@@ -26,7 +121,7 @@ class LocalOffsetSolver:
 
             jgr[:, i] = jgr[:, pi] @ jgr[:, i]
 
-        self.jgr = jgr
+        self.jgr = jgr.to(device)
 
     def batch_find_local_offsets(self, markers, j3_indices, j3_weights, init_params=None, u=1e-3, v=1.5):
         n_frames, n_markers, _ = markers.shape
@@ -90,7 +185,6 @@ class LocalOffsetSolver:
         jacobian = (res_add - res_sub) / (2 * self.eps)
 
         return jacobian.view(num_params, -1).T
-
 
     def find_local_offsets(self, i, markers, j3_indices, j3_weights, init_params=None, u=1e-3, v=1.5):
         n_markers, _ = markers.shape

@@ -16,7 +16,7 @@ class SVD_Solver(nn.Module):
         """
         bn = Z.shape[0]
         n_joints = Z.shape[-2]
-        Y_hat = torch.empty(bn, n_joints, 3, 4).to(torch.float32)
+        Y_hat = torch.empty(bn, n_joints, 3, 4).to(torch.float32).to(X.device)
         for bi in range(bn):
             wb = w[bi]
             for i in range(n_joints):

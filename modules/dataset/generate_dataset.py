@@ -5,15 +5,17 @@ import copy
 import pickle
 import gc
 import torch
+import torch.multiprocessing as mp
 import c3d
-from scipy.spatial.transform import Rotation as R
 from datetime import datetime
+from tqdm import tqdm
 
-from modules.solver.local_offset_solver import LocalOffsetSolver
+from modules.solver.local_offset_solver import LocalOffsetSolver, solve_for_multiprocessing
 from modules.utils.paths import Paths
 from modules.utils.dfaust_utils import compute_vertex_normal
 from modules.utils.functions import dict2class
 from human_body_prior.body_model.body_model_prior import BodyModel
+from human_body_prior.body_model.lbs import batch_rodrigues
 
 import time
 import keyboard
@@ -30,7 +32,7 @@ import keyboard
 
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
+cpu = torch.device('cpu')
 
 def to_cpu(tensor):
     return tensor.detach().cpu().numpy()
@@ -43,7 +45,7 @@ def to_gpu(ndarray):
 def generate_dataset():
     print(device)
     # raw_data_dirs = ['CMU', 'SFU']
-    raw_data_dirs = ['CMU', 'PosePrior', 'HDM05', 'SOMA']  # 'PosePrior', 'HDM05', 'SOMA', 'DanceDB',
+    raw_data_dirs = ['PosePrior', 'HDM05', 'SOMA']  # 'PosePrior', 'HDM05', 'SOMA', 'DanceDB',
 
     topology = np.array(
         [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19, 20, 21]
@@ -169,11 +171,11 @@ def generate_dataset_entry(dataset_name, common_data, date):
     j3_indices = to_gpu(j3_indices).type(torch.int32)  # [v, 3]
     j3_weights = to_gpu(j3_weights)  # [v, 3]
 
-    local_offset_solver = LocalOffsetSolver(
-        topology=topology,
-        j3_indices=j3_indices,
-        j3_weights=j3_weights
-    )
+    # local_offset_solver = LocalOffsetSolver(
+    #     topology=topology.to(cpu),
+    #     # j3_indices=j3_indices.to(cpu),
+    #     # j3_weights=j3_weights.to(cpu)
+    # )
 
     # check files
     target_npz_files = []
@@ -196,17 +198,7 @@ def generate_dataset_entry(dataset_name, common_data, date):
         gc.collect()
         torch.cuda.empty_cache()
 
-        print('')
-        # gc.collect()
-        # torch.cuda.empty_cache()
-        # cur_vram_memory = torch.cuda.memory_allocated()
-        # max_vram_memory = torch.cuda.max_memory_allocated()
-        # print(f'VRAM memory: {cur_vram_memory / (1024 ** 3):.2f} GB / {max_vram_memory / (1024 ** 3):.2f} GB')
-
-        # assert npz_file.stem == c3d_file.stem + '_poses' or npz_file.stem == c3d_file.stem + '_stageii',\
-        #     f'Index: {file_idx} | {npz_file.name}, {c3d_file.name}'
-
-        print(f'dataset name: {dataset_name} | [{file_idx+1}/{len(c3d_files)}] | file name: {c3d_file.stem}')
+        print(f'\ndataset name: {dataset_name} | [{file_idx+1}/{len(c3d_files)}] | file name: {c3d_file.stem}')
 
         npz_file = target_npz_files[file_idx]
         amass = np.load(npz_file, allow_pickle=True)
@@ -283,6 +275,7 @@ def generate_dataset_entry(dataset_name, common_data, date):
 
             generate_dataset_entry_batch(
                 dataset=dataset,
+                topology=topology,
                 n_frames=fei-fsi,
                 markers=markers[fsi:fei],
                 betas=amass.betas,
@@ -294,7 +287,7 @@ def generate_dataset_entry(dataset_name, common_data, date):
                 bind_jlp=bind_jlp,
                 j3_indices=j3_indices,
                 j3_weights=j3_weights,
-                local_offset_solver=local_offset_solver,
+                # local_offset_solver=local_offset_solver,
                 jgp=jgp[fsi:fei],
                 poses=poses[fsi:fei]
             )
@@ -337,8 +330,29 @@ def generate_dataset_entry(dataset_name, common_data, date):
         pickle.dump(test_dataset, f)
 
 
+def worker(
+        task_queue, result_queue, checklist, solving_max_iter, solving_max_mse,
+        jgr, jgp, n_vm, vm, j3_indices, j3_weights, init_params
+):
+    while True:
+        i = task_queue.get()
+        if i is None:
+            break
+        params, virtual_markers, max_iter, mse = solve_for_multiprocessing(
+            jgr[i], jgp[i], vm[i, :n_vm[i]], j3_indices[i, :n_vm[i]], j3_weights[i, :n_vm[i]], init_params[i, :n_vm[i]]
+        )
+        result_queue.put((i, params.view(-1, 3, 3), virtual_markers.view(-1, 3)))
+
+        checklist[i] = 1
+        if max_iter > solving_max_iter[0]:
+            solving_max_iter[0] = max_iter
+        if mse > solving_max_mse[0]:
+            solving_max_mse[0] = mse
+
+
 def generate_dataset_entry_batch(
         dataset,
+        topology,
         n_frames,
         markers,
         betas,
@@ -350,11 +364,10 @@ def generate_dataset_entry_batch(
         bind_jlp,
         j3_indices,
         j3_weights,
-        local_offset_solver,
+        # local_offset_solver,
         jgp,
         poses
 ):
-    # print('')
     # _________________________________
     # Get vertex normals, valid markers
 
@@ -371,20 +384,21 @@ def generate_dataset_entry_batch(
         n_vm_list.append(vm_f.shape[0])
 
     vn = torch.stack(vn, dim=0)  # [f, v, 3]
-    n_mvm = max(n_vm_list)  # number of max valid markers
-    vm = torch.zeros(n_frames, n_mvm, 3).to(markers.device)  # [f, vm, 3]
+    n_vm = torch.Tensor(n_vm_list).to(torch.int32).to(device)
+    n_mvm = torch.max(n_vm).item()  # number of max valid markers
+    vm = torch.zeros(n_frames, n_mvm, 3).to(device)  # [f, vm, 3]
     for i in range(n_frames):
-        vm[i, :n_vm_list[i]] = vm_list[i]
+        vm[i, :n_vm[i]] = vm_list[i]
 
     del mag
     torch.cuda.empty_cache()
     gc.collect()
 
     if n_mvm > 90:
-        print('')
+        print(f'Too many markers: {n_mvm}')
         return
 
-    print(f' | vm {n_mvm}')
+    print(f' | vm {n_mvm}', end='')
 
     # ________________________
     # Select matching vertices
@@ -426,49 +440,87 @@ def generate_dataset_entry_batch(
     ]  # [f, vm, j3, 3]
 
     for i in range(n_frames):
-        m_j3_weights[i, n_vm_list[i]:, :] = 0
-        init_m_j3_offsets[i, n_vm_list[i]:] = 0
-        ghost_marker_mask[i, n_vm_list[i]:] = 0
+        m_j3_weights[i, n_vm[i]:, :] = 0
+        init_m_j3_offsets[i, n_vm[i]:] = 0
+        ghost_marker_mask[i, n_vm[i]:] = 0
 
-    local_offset_solver.set_transform(poses, jgp)
+    jgp = jgp.to(cpu)
+    jgr = batch_rodrigues(poses.view(n_frames, -1, 3).view(-1, 3)).view(n_frames, -1, 3, 3)
 
-    params = torch.zeros(n_frames, n_mvm, 3, 3).to(vm.device)
-    virtual_markers = torch.zeros(n_frames, n_mvm, 3).to(vm.device)
-    for i in range(n_frames):
-        print(f'\r\tsolving... [{i+1}/{n_frames}]', end='')
-        params_f, virtual_markers_f = local_offset_solver.find_local_offsets(
-            i=i,
-            markers=vm[i, :n_vm_list[i]],
-            j3_indices=m_j3_indices[i, :n_vm_list[i]],
-            j3_weights=m_j3_weights[i, :n_vm_list[i]],
-            init_params=init_m_j3_offsets[i, :n_vm_list[i]]
+    for i, pi in enumerate(topology):
+        if i == 0:
+            assert pi == -1
+            continue
+
+        jgr[:, i] = jgr[:, pi] @ jgr[:, i]
+    jgr = jgr.to(cpu)
+
+    vm = vm.to(cpu)
+    n_vm = n_vm.to(cpu)
+    m_j3_indices = m_j3_indices.to(cpu)
+    m_j3_weights = m_j3_weights.to(cpu)
+    init_m_j3_offsets = init_m_j3_offsets.to(cpu)
+
+    m_j3_offsets = torch.zeros(n_frames, n_mvm, 3, 3).to(cpu)
+    virtual_markers = torch.zeros(n_frames, n_mvm, 3).to(cpu)
+
+    jgp.share_memory_()
+    jgr.share_memory_()
+    n_vm.share_memory_()
+    m_j3_indices.share_memory_()
+    m_j3_weights.share_memory_()
+    init_m_j3_offsets.share_memory_()
+
+    m_j3_offsets.share_memory_()
+    virtual_markers.share_memory_()
+
+    task_queue = mp.Queue()
+    result_queue = mp.Queue()
+
+    checklist = torch.zeros(n_frames).to(torch.int32)
+    checklist.share_memory_()
+    solving_max_iter = torch.zeros(1).to(torch.int32)
+    solving_max_iter.share_memory_()
+    solving_max_mse = torch.zeros(1)
+    solving_max_mse.share_memory_()
+
+    start_time = time.time()
+    processes = []
+    n_processes = mp.cpu_count() // 2
+    print(f' | num processes: {n_processes}')
+    for rank in range(n_processes):
+        p = mp.Process(
+            target=worker,
+            args=(
+                task_queue, result_queue, checklist, solving_max_iter, solving_max_mse,
+                jgr, jgp, n_vm, vm, m_j3_indices, m_j3_weights, init_m_j3_offsets
+            )
         )
-        params[i, :n_vm_list[i], :, :] = params_f.view(-1, 3, 3)
-        virtual_markers[i, :n_vm_list[i], :] = virtual_markers_f.view(-1, 3)
+        p.start()
+        processes.append(p)
 
-    virtual_vm = local_offset_solver.batch_lbs(params, m_j3_indices, m_j3_weights)
-    error = torch.linalg.norm(virtual_vm - vm, dim=-1)
+    for i in range(n_frames):
+        task_queue.put(i)
+
+    for _ in range(len(processes)):
+        task_queue.put(None)
+
+    for _ in range(n_frames):
+        i, params_f, virtual_markers_f = result_queue.get()
+        m_j3_offsets[i, :n_vm[i], :, :] = params_f
+        virtual_markers[i, :n_vm[i], :] = virtual_markers_f
+
+    for p in processes:
+        p.join()
+
+    # virtual_vm = local_offset_solver.batch_lbs(params, m_j3_indices, m_j3_weights)
+    error = torch.linalg.norm(virtual_markers - vm, dim=-1)
     mask = error != 0
     mean_error = torch.masked_select(error, mask).mean()
-    print(f'\n\tbatch error: {mean_error}')
 
-    # local_offset_solver.set_transform(poses, jgp)
-    #
-    # params = torch.zeros(n_frames, n_mvm, 3, 3).to(vm.device)
-    # virtual_markers = torch.zeros(n_frames, n_mvm, 3).to(vm.device)
-    # for i in range(n_frames):
-    #     print(f'\r\tsolving... [{i+1}/{n_frames}]', end='')
-    #
-    #     m_j3_weights[i, n_vm_list[i]:, :] = 0
-    #     params_f, virtual_markers_f = local_offset_solver.find_marker_local_offsets(
-    #         i=i,
-    #         markers=vm[i, :n_vm_list[i]],
-    #         j3_indices=m_j3_indices[i, :n_vm_list[i]],
-    #         j3_weights=m_j3_weights[i, :n_vm_list[i]],
-    #         init_params=init_marker_local_offsets[i, :n_vm_list[i]]
-    #     )
-    #     params[i, :n_vm_list[i], :, :] = params_f.view(-1, 3, 3)
-    #     virtual_markers[i, :n_vm_list[i], :] = virtual_markers_f.view(-1, 3)
+    end_time = time.time()
+
+    print(f'\ntime: {end_time - start_time:.1f} | batch error: {mean_error:.8f} | max mse: {solving_max_mse[0].item():.8f} | max iter: {solving_max_iter[0].item()}')
 
     # topology = np.array(
     #     [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19, 20, 21]
@@ -489,7 +541,7 @@ def generate_dataset_entry_batch(
     dataset.m_v_idx.append(to_cpu(m_v_idx))
     dataset.m_j3_indices.append(to_cpu(m_j3_indices))
     dataset.m_j3_weights.append(to_cpu(m_j3_weights))
-    dataset.m_j3_offsets.append(to_cpu(init_m_j3_offsets))
+    dataset.m_j3_offsets.append(to_cpu(m_j3_offsets))
     dataset.bind_v_shaped.append(to_cpu(bind_vgp))
     dataset.bind_vn.append(to_cpu(bind_vn))
     dataset.bind_jlp.append(to_cpu(bind_jlp))
@@ -498,123 +550,6 @@ def generate_dataset_entry_batch(
     dataset.markers.append(to_cpu(vm))
     dataset.poses.append(to_cpu(poses))
     dataset.jgp.append(to_cpu(jgp))
-
-
-def generate_dataset_entry_batch_legacy(
-        dataset,
-        n_frames,
-        markers,
-        betas,
-        vgp,
-        bind_vgp,
-        bind_vn,
-        bind_jgp,
-        bind_jlp,
-        j3_indices,
-        j3_weights,
-        local_offset_solver,
-        jgp,
-        poses
-):
-    # Select closest vertex indices
-    markers_temp = markers.clone()
-    markers_temp = torch.where((markers_temp > -0.001) & (markers_temp < 0.001), torch.tensor(9999), markers_temp)
-
-    n_markers = markers.shape[1]
-    marker_batch_size = 50
-    n_marker_batches = n_markers // marker_batch_size
-
-    params_batch = []
-    virtual_markers_batch = []
-    m_v_idx_batch = []
-    ghost_marker_mask_batch = []
-
-    def marker_mini_batch(msi, mei):
-        print(f'\n\tmarker batch: {msi}-{mei} / {n_markers}', end='')
-
-        vec_markers_verts = markers_temp[:, msi:mei, None, :] - vgp[:, None, :, :]  # [f, m, v, 3]
-        dist_markers_verts = torch.sqrt(torch.sum(vec_markers_verts ** 2, dim=-1))  # [f, m, v]
-
-        del vec_markers_verts
-        torch.cuda.empty_cache()
-        gc.collect()
-
-        dist_markers_verts[dist_markers_verts > 1000] = 9999
-
-        dist_markers_closest_verts = torch.min(dist_markers_verts, dim=-1).values  # [f, m]
-
-        ghost_marker_mask = torch.where(dist_markers_closest_verts > 0.1, torch.tensor(0), torch.tensor(1))
-
-        filtered_dist_markers_verts = torch.where(
-            dist_markers_verts > 1000,
-            torch.tensor(float('nan')),
-            dist_markers_verts
-        )
-
-        dist_avg = torch.nanmean(filtered_dist_markers_verts, dim=0)  # [m, v]
-        m_v_idx = torch.argmin(dist_avg, dim=-1)
-
-        del dist_markers_verts
-        del filtered_dist_markers_verts
-        torch.cuda.empty_cache()
-        gc.collect()
-
-        m_idx = torch.arange(dist_avg.shape[0], device=device)
-        disp_bind_mgp = bind_vgp[m_v_idx, :] + bind_vn[m_v_idx, :] * dist_avg[m_idx, m_v_idx][:, None]  # [m, 3]
-
-        init_marker_local_offset = disp_bind_mgp[:, None, :] - bind_jgp[None, :, :]  # [m, j, 3]
-        init_marker_local_offset = init_marker_local_offset[m_idx[:, None], j3_indices[m_v_idx], :]  # [m, j3, 3]
-
-        init_marker_local_offset[torch.isnan(init_marker_local_offset)] = 0
-
-        params, virtual_markers = local_offset_solver.find_markers_local_offsets(
-            markers=markers[:, msi:mei, :],
-            m_v_idx=m_v_idx,
-            jgp=jgp,
-            poses=poses,
-            ghost_marker_mask=ghost_marker_mask,
-            init_params=init_marker_local_offset
-        )
-        params_batch.append(params.view(mei - msi, 3, 3))
-        virtual_markers_batch.append(virtual_markers)
-        m_v_idx_batch.append(m_v_idx)
-        ghost_marker_mask_batch.append(ghost_marker_mask)
-
-    for i in range(n_marker_batches):
-        marker_start_idx = i * marker_batch_size
-        marker_end_idx = marker_start_idx + marker_batch_size
-        marker_mini_batch(marker_start_idx, marker_end_idx)
-
-    extra_markers = n_markers % marker_batch_size
-    if extra_markers > 0:
-        marker_start_idx = n_marker_batches * marker_batch_size
-        marker_end_idx = n_markers
-        marker_mini_batch(marker_start_idx, marker_end_idx)
-
-    j3_offsets = torch.cat(params_batch, dim=0)
-    virtual_markers = torch.cat(virtual_markers_batch, dim=1)
-    m_v_idx = torch.cat(m_v_idx_batch, dim=0)
-    ghost_marker_mask = torch.cat(ghost_marker_mask_batch, dim=1)
-
-    dataset.n_frames.append(n_frames)
-    dataset.betas.append(betas)
-    dataset.m_v_idx.append(to_cpu(m_v_idx))
-    dataset.m_j3_indices.append(to_cpu(j3_indices[m_v_idx]))
-    dataset.m_j3_weights.append(to_cpu(j3_weights[m_v_idx]))
-    dataset.m_j3_offsets.append(to_cpu(j3_offsets))
-    dataset.bind_v_shaped.append(to_cpu(bind_vgp))
-    dataset.bind_vn.append(to_cpu(bind_vn))
-    dataset.bind_jlp.append(to_cpu(bind_jlp))
-    dataset.bind_jgp.append(to_cpu(bind_jgp))
-    dataset.ghost_marker_mask.append(to_cpu(ghost_marker_mask))
-    dataset.markers.append(to_cpu(markers))
-    dataset.poses.append(to_cpu(poses))
-    dataset.jgp.append(to_cpu(jgp))
-
-    masked_markers = markers * ghost_marker_mask.unsqueeze(-1)
-    print('solving error: ', end='')
-    print(torch.mean(torch.sqrt(torch.sum(torch.square(masked_markers - virtual_markers), dim=-1))).item())  # No optim: 0.0788 <-> Yes optim: 6.2435e-05
-
 
 
 def test(**kwargs):
@@ -745,6 +680,6 @@ def read_c3d_markers(file_path):
 
 
 if __name__ == '__main__':
-    torch.set_printoptions(precision=4, sci_mode=False)
-    np.set_printoptions(precision=4, suppress=True)
+    torch.set_printoptions(precision=8, sci_mode=False)
+    np.set_printoptions(precision=8, suppress=True)
     generate_dataset()
