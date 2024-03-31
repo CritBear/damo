@@ -10,7 +10,7 @@ import c3d
 from datetime import datetime
 from tqdm import tqdm
 
-from modules.solver.bind_pose_marker_solver import find_bind_mgp
+from modules.solver.local_offset_solver_backup import LocalOffsetSolver, solve_for_multiprocessing
 from modules.utils.paths import Paths
 from modules.utils.dfaust_utils import compute_vertex_normal
 from modules.utils.functions import dict2class
@@ -44,7 +44,7 @@ def to_gpu(ndarray):
 
 def generate_dataset():
     # raw_data_dirs = ['CMU', 'SFU']
-    raw_data_dirs = ['CMU']  # 'PosePrior', 'HDM05', 'SOMA', 'DanceDB',
+    raw_data_dirs = ['ACCAD']  # 'PosePrior', 'HDM05', 'SOMA', 'DanceDB',
     save_batch_file = True
     print(f"save batch file: {save_batch_file}")
 
@@ -335,16 +335,16 @@ def generate_dataset_entry(dataset_name, common_data, date, save_batch_file=Fals
 
 def worker(
         task_queue, result_queue, checklist, solving_max_iter, solving_max_mse,
-        bind_j3gp, jgr, jgp, n_vm, vm, j3_indices, j3_weights, init_params
+        jgr, jgp, n_vm, vm, j3_indices, j3_weights, init_params
 ):
     while True:
         i = task_queue.get()
         if i is None:
             break
-        params, virtual_markers, max_iter, mse = find_bind_mgp(
-            bind_j3gp[i, :n_vm[i]], jgr[i], jgp[i], vm[i, :n_vm[i]], j3_indices[i, :n_vm[i]], j3_weights[i, :n_vm[i]], init_params[i, :n_vm[i]]
+        params, virtual_markers, max_iter, mse = solve_for_multiprocessing(
+            jgr[i], jgp[i], vm[i, :n_vm[i]], j3_indices[i, :n_vm[i]], j3_weights[i, :n_vm[i]], init_params[i, :n_vm[i]]
         )
-        result_queue.put((i, params.view(-1, 3), virtual_markers.view(-1, 3)))
+        result_queue.put((i, params.view(-1, 3, 3), virtual_markers.view(-1, 3)))
         # print(i)
         checklist[i] = 1
         if max_iter > solving_max_iter[0]:
@@ -430,18 +430,21 @@ def generate_dataset_entry_batch(
     gc.collect()
 
     disp_length = norm_m_v[torch.arange(n_frames)[:, None], torch.arange(n_mvm), m_v_idx]  # [f, vm]
-    init_bind_mgp = bind_vgp[m_v_idx] + bind_vn[m_v_idx] * disp_length[:, :, None]  # [f, vm, 3]
+    disp_bind_mgp = bind_vgp[m_v_idx] + bind_vn[m_v_idx] * disp_length[:, :, None]  # [f, vm, 3]
+
+    init_m_j3_offsets = disp_bind_mgp[:, :, None, :] - bind_jgp[None, None, :, :]  # [f, vm, j, 3]
 
     m_j3_indices = j3_indices[m_v_idx]  # [f, vm, j3]
     m_j3_weights = j3_weights[m_v_idx]  # [f, vm, j3]
 
-    bind_j3gp = bind_jgp[m_j3_indices]  # [f, vm, j3, 3]
+    init_m_j3_offsets = init_m_j3_offsets[
+        torch.arange(n_frames)[:, None, None], torch.arange(n_mvm)[:, None], m_j3_indices
+    ]  # [f, vm, j3, 3]
 
     for i in range(n_frames):
-        m_j3_weights[i, n_vm[i]:] = 0
-        init_bind_mgp[i, n_vm[i]:] = 0
+        m_j3_weights[i, n_vm[i]:, :] = 0
+        init_m_j3_offsets[i, n_vm[i]:] = 0
         ghost_marker_mask[i, n_vm[i]:] = 0
-        bind_j3gp[i, n_vm[i]:] = 0
 
     jgp = jgp.to(cpu)
     jgr = batch_rodrigues(poses.view(n_frames, -1, 3).view(-1, 3)).view(n_frames, -1, 3, 3)
@@ -458,10 +461,9 @@ def generate_dataset_entry_batch(
     n_vm = n_vm.to(cpu)
     m_j3_indices = m_j3_indices.to(cpu)
     m_j3_weights = m_j3_weights.to(cpu)
-    init_bind_mgp = init_bind_mgp.to(cpu)
-    bind_j3gp = bind_j3gp.to(cpu)
+    init_m_j3_offsets = init_m_j3_offsets.to(cpu)
 
-    params = torch.zeros(n_frames, n_mvm, 3).to(cpu)
+    m_j3_offsets = torch.zeros(n_frames, n_mvm, 3, 3).to(cpu)
     virtual_markers = torch.zeros(n_frames, n_mvm, 3).to(cpu)
 
     jgp.share_memory_()
@@ -469,10 +471,9 @@ def generate_dataset_entry_batch(
     n_vm.share_memory_()
     m_j3_indices.share_memory_()
     m_j3_weights.share_memory_()
-    init_bind_mgp.share_memory_()
-    bind_j3gp.share_memory_()
+    init_m_j3_offsets.share_memory_()
 
-    params.share_memory_()
+    m_j3_offsets.share_memory_()
     virtual_markers.share_memory_()
 
     task_queue = mp.Queue()
@@ -487,14 +488,14 @@ def generate_dataset_entry_batch(
 
     start_time = time.time()
     processes = []
-    n_processes = 8  # mp.cpu_count() // 2
+    n_processes = mp.cpu_count() // 4
     print(f' | num processes: {n_processes}')
     for rank in range(n_processes):
         p = mp.Process(
             target=worker,
             args=(
                 task_queue, result_queue, checklist, solving_max_iter, solving_max_mse,
-                bind_j3gp, jgr, jgp, n_vm, vm, m_j3_indices, m_j3_weights, init_bind_mgp
+                jgr, jgp, n_vm, vm, m_j3_indices, m_j3_weights, init_m_j3_offsets
             )
         )
         p.start()
@@ -508,23 +509,20 @@ def generate_dataset_entry_batch(
 
     for _ in range(n_frames):
         i, params_f, virtual_markers_f = result_queue.get()
-        params[i, :n_vm[i], :] = params_f
+        m_j3_offsets[i, :n_vm[i], :, :] = params_f
         virtual_markers[i, :n_vm[i], :] = virtual_markers_f
 
     for p in processes:
         p.join()
 
+    # virtual_vm = local_offset_solver.batch_lbs(params, m_j3_indices, m_j3_weights)
     error = torch.linalg.norm(virtual_markers - vm, dim=-1)
     mask = error != 0
     mean_error = torch.masked_select(error, mask).mean()
 
     end_time = time.time()
 
-    print(f'\ttime: {end_time - start_time:.1f} | batch error: {mean_error:.8f}\n\tmax mse: {solving_max_mse[0].item():.8f} | max iter: {solving_max_iter[0].item()}')
-
-    # params [f, vm, 3]
-    # bind_j3gp [f, vm, j3, 3]
-    m_j3_offsets = params.to(device)[:, :, None, :] - bind_j3gp.to(device)
+    print(f'\ntime: {end_time - start_time:.1f} | batch error: {mean_error:.8f} | max mse: {solving_max_mse[0].item():.8f} | max iter: {solving_max_iter[0].item()}')
 
     # topology = np.array(
     #     [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19, 20, 21]
@@ -533,7 +531,6 @@ def generate_dataset_entry_batch(
     #     topology=topology,
     #     jgp=jgp,
     #     bind_jgp=bind_jgp,
-    #     virtual_bind_mgp=params,
     #     markers=markers,
     #     virtual_markers=virtual_markers,
     #     vgp_m=vgp[torch.arange(n_frames)[:, None], m_v_idx],
@@ -608,30 +605,16 @@ def test(**kwargs):
         for i in range(1, n_joints)
     ]
 
-    v_bind_joints = [
-        sphere(pos=vector(*bind_jgp[i]), radius=0.02, color=color.orange)
-        for i in range(n_joints)
-    ]
-    v_bind_bones = [
-        cylinder(pos=v_joints[i].pos, axis=(v_joints[topology[i]].pos - v_bind_joints[i].pos), radius=0.01,
-                 color=color.orange)
-        for i in range(1, n_joints)
-    ]
-    v_bind_vmarkers = [
-        sphere(radius=0.01, color=color.cyan)
-        for i in range(n_max_markers)
-    ]
-
     # v_weights = [
     #     cylinder(radius=0.003, color=color.white)
     #     for i in range(n_vertices * 3)
     # ]
 
-    # n_verts = kwargs.vgp.shape[1]
-    # v_verts = [
-    #     sphere(radius=0.005, color=color.white)
-    #     for _ in range(n_verts)
-    # ]
+    n_verts = kwargs.vgp.shape[1]
+    v_verts = [
+        sphere(radius=0.005, color=color.white)
+        for _ in range(n_verts)
+    ]
     v_norms = [
         arrow(shaftwidth=0.005, color=color.magenta)
         for _ in range(n_max_markers)
@@ -655,7 +638,6 @@ def test(**kwargs):
         for i in range(n_max_markers):
             v_markers[i].pos = vector(*markers[f, i])
             v_vmarkers[i].pos = vector(*kwargs.virtual_markers[f, i])
-            v_bind_vmarkers[i].pos = vector(*kwargs.virtual_bind_mgp[f, i])
 
             # v_norms[i].pos = v_verts[markers_verts_idx[i]].pos
             # v_norms[i].axis = vector(*vert_norms[f, markers_verts_idx[i]]) * 0.1
@@ -670,8 +652,8 @@ def test(**kwargs):
             v_norms[i].pos = vector(*kwargs.vgp_m[f, i])
             v_norms[i].axis = vector(*kwargs.vn[f, i]) * 0.1
 
-        # for i in range(n_verts):
-        #     v_verts[i].pos = vector(*kwargs.vgp[f, i])
+        for i in range(n_verts):
+            v_verts[i].pos = vector(*kwargs.vgp[f, i])
 
         # if i in markers_verts_idx:
         #     v_verts[i].color = color.magenta

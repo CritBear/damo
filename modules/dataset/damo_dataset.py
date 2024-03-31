@@ -18,6 +18,7 @@ class DamoDataset(Dataset):
             dataset_paths,
             n_max_markers,
             seq_len,
+            r_ss_ds_ratio=None,
             noise_jitter=False,
             noise_ghost=False,
             noise_occlusion=False,
@@ -30,6 +31,7 @@ class DamoDataset(Dataset):
 
         self.n_max_markers = n_max_markers
         self.seq_len = seq_len
+        self.r_ss_ds_ratio =r_ss_ds_ratio
         self.noise_jitter = noise_jitter
         self.noise_ghost = noise_ghost
         self.noise_occlusion = noise_occlusion
@@ -134,7 +136,11 @@ class DamoDataset(Dataset):
         else:
             end_idx = frame_idx + half_seq + 1
 
-        if item_idx % 2 == 0:
+        ratio_sum = sum(self.r_ss_ds_ratio)
+        self.r_ss_ds_ratio = [v / ratio_sum for v in self.r_ss_ds_ratio]
+        r = random.random()
+
+        if r < self.r_ss_ds_ratio[0]:
             return self.getitem_real(
                 motion_idx,
                 frame_idx,
@@ -144,13 +150,16 @@ class DamoDataset(Dataset):
                 end_count
             )
         else:
+            ratio_sum = sum(self.r_ss_ds_ratio[1:])
+            ss_ds_ratio = [v / ratio_sum for v in self.r_ss_ds_ratio[1:]]
             return self.getitem_synthetic(
                 motion_idx,
                 frame_idx,
                 start_idx,
                 end_idx,
                 start_count,
-                end_count
+                end_count,
+                ss_ds_ratio=ss_ds_ratio
             )
 
     def getitem_real(self, mi, fi, si, ei, sc, ec):
@@ -239,13 +248,13 @@ class DamoDataset(Dataset):
 
         return items
 
-    def getitem_synthetic(self, mi, fi, si, ei, sc, ec):
+    def getitem_synthetic(self, mi, fi, si, ei, sc, ec, ss_ds_ratio):
         n_joints = self.n_joints
 
-        if torch.rand(1) < 0.5:
-            use_superset = False
-        else:
+        if torch.rand(1) < ss_ds_ratio[0]:
             use_superset = True
+        else:
+            use_superset = False
 
         if use_superset:
             n_selected_superset = np.random.randint(22, len(self.superset_variant))

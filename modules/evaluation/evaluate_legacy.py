@@ -27,24 +27,23 @@ def evaluate():
         'real': True
     }
 
-    model_name = 'DAMO'
-    test_data_dir = Paths.test_results / 'model_outputs'
+    model_name = 'damo_240330034650_epc100'
 
-    for dataset, do in eval_dataset.items():
-        if not do:
+    for dataset, b_dataset in eval_dataset.items():
+        if not b_dataset:
             continue
 
-        for noise, do in eval_noise.items():
-            if not do:
+        for noise, b_noise in eval_noise.items():
+            if not b_noise:
                 continue
 
-            eval_data_path = Paths.datasets / 'eval' / 'eval_data_for_damo' / f'eval_data_damo-soma_{dataset}_{noise}.pkl'
+            eval_data_path = Paths.datasets / 'evaluate' / 'legacy' / f'eval_data_damo-soma_{dataset}_{noise}.pkl'
             with open(eval_data_path, 'rb') as f:
                 eval_data = pickle.load(f)
 
             body_shape_indices = eval_data['body_shape_index'] if noise != 'real' else None
 
-            test_data_path = test_data_dir / model_name / f'{model_name}_{dataset}_{noise}.pkl'  # _model_output
+            test_data_path = Paths.test_results / 'model_outputs' / model_name / f'model_output_{eval_data_path.stem}.pkl'  # _model_output
             evaluate_entry(test_data_path, model_name, body_shape_indices)
 
 
@@ -53,7 +52,7 @@ def evaluate_entry(test_data_path, model_name, body_shape_indices):
     generate_figure_data = False
     position_smoothing = False
     rotation_smoothing = False
-    pre_motion_idx = 5
+    pre_motion_idx = 0
     pre_n_frames = 400
 
     file_name = test_data_path.stem
@@ -61,9 +60,9 @@ def evaluate_entry(test_data_path, model_name, body_shape_indices):
     with open(test_data_path, 'rb') as f:
         test_data = pickle.load(f)
 
-    topology = np.array([-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19])
+    topology = np.array([-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19, 20, 21])
     n_max_markers = 90
-    n_joints = 22
+    n_joints = 24
 
     score_manager = ScoreManager()
     viewer = Viewer(
@@ -92,8 +91,8 @@ def evaluate_entry(test_data_path, model_name, body_shape_indices):
             'joint_global_transform': [],  # [ (n_frames, n_joints, 4, 4) ]
             'smooth_joint_global_transform': [],  # [ (n_frames, n_joints, 4, 4) ]
             'marker_indices': [],  # [ [n_markers] ]
-            'weight': [],  # [ (n_frames, n_max_markers, n_joints + 1) ]
-            'offset': [],  # [ (n_frames, n_max_markers, n_joints + 1, 3) ]
+            'weights': [],  # [ (n_frames, n_max_markers, n_joints + 1) ]
+            'offsets': [],  # [ (n_frames, n_max_markers, n_joints + 1, 3) ]
         }
         
     for motion_idx in range(len(test_data)):
@@ -112,17 +111,17 @@ def evaluate_entry(test_data_path, model_name, body_shape_indices):
         motion = test_data[motion_idx]
         points = motion['points']  # (n_frames, n_max_markers, 3)
         indices = motion['indices']  # (n_frames, n_max_markers, n_joints + 1)
-        j3_weight = motion['weight']  # (n_frames, n_max_markers, 3)
-        j3_offset = motion['offset']  # (n_frames, n_max_markers, 3, 3)
+        j3_weight = motion['weights']  # (n_frames, n_max_markers, 3)
+        j3_offset = motion['offsets']  # (n_frames, n_max_markers, 3, 3)
 
         n_frames = points.shape[0]
 
-        gt_jgp = motion['joint_global_positions'][0][:n_frames]  # (n_frames, n_joints, 3)
+        gt_jgp = motion['jgp'][0][:n_frames]  # (n_frames, n_joints, 3)
         # gt_jgr = clip['joint_global_rotations'][0][:n_frames]  # (n_frames, n_joints, 3, 3)
         # gt_jlp = motion['joint_local_positions'][0]# [-n_joints:]  # (n_joints, 3)
         # print(gt_jlp.shape)
         # return
-        gt_jlr = motion['joint_local_rotations'][0][:n_frames]  # (n_frames, n_joints, 3, 3)
+        gt_jlr = motion['jlr'][0][:n_frames]  # (n_frames, n_joints, 3, 3)
 
         j3_indices = np.argsort(indices)[:, :, -1:-4:-1]
         ja_weight = np.zeros((n_frames, n_max_markers, n_joints + 1))
@@ -190,21 +189,21 @@ def evaluate_entry(test_data_path, model_name, body_shape_indices):
 
         print(jlr_seq.shape)
 
-        init_joint = dataset_info['init_joint_global_position'][body_shape_idx]
-        vertex_template = dataset_info['init_vertices'][body_shape_idx]  # (6890, 3)
-        vertex_joint_offset = vertex_template[:, np.newaxis, :] - init_joint[np.newaxis, :, :]  # (6890, 22, 3)
-
-        vertex_global = jgt_seq[:, np.newaxis, :, :3, :3] @ vertex_joint_offset[np.newaxis, :, :, :, np.newaxis]
-        # (F, M, J, 3, 3) @ (F, M, J, 3, 1) -> (F, M, J, 3, 1)
-        vertex_global = vertex_global.squeeze()  # (F, M, J, 3)
-        vertex_global += jgt_seq[:, np.newaxis, :, :3, 3]
-        vertex_global = np.sum(vertex_global * vertex_joint_weight[:, :, np.newaxis], axis=2)
+        # init_joint = dataset_info['init_joint_global_position'][body_shape_idx]
+        # vertex_template = dataset_info['init_vertices'][body_shape_idx]  # (6890, 3)
+        # vertex_joint_offset = vertex_template[:, np.newaxis, :] - init_joint[np.newaxis, :, :]  # (6890, 22, 3)
+        #
+        # vertex_global = jgt_seq[:, np.newaxis, :, :3, :3] @ vertex_joint_offset[np.newaxis, :, :, :, np.newaxis]
+        # # (F, M, J, 3, 3) @ (F, M, J, 3, 1) -> (F, M, J, 3, 1)
+        # vertex_global = vertex_global.squeeze()  # (F, M, J, 3)
+        # vertex_global += jgt_seq[:, np.newaxis, :, :3, 3]
+        # vertex_global = np.sum(vertex_global * vertex_joint_weight[:, :, np.newaxis], axis=2)
 
         score_manager.calc_error(
-            jgt_seq[:, :, :3, 3],
-            gt_jgp[start_frame:start_frame + n_frames],
-            jlr_seq,
-            gt_jlr[start_frame:start_frame + n_frames]
+            jgt_seq[:, :22, :3, 3],
+            gt_jgp[start_frame:start_frame + n_frames, :22],
+            jlr_seq[:, :22],
+            gt_jlr[start_frame:start_frame + n_frames, :22]
         )
 
         jpe = score_manager.memory['jpe'][-1]

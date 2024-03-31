@@ -32,9 +32,9 @@ class PoseSolver:
             ]
             if self.rest_pose is None:
                 additional_data = np.load(Paths.support_data / 'additional_file.npz')
-                self.rest_pose = additional_data['init_joint_list'][0, :22, :]
+                self.rest_pose = additional_data['init_joint_list'][0, :24, :]
                 # smplh_data = np.load(Paths.support_data / 'smplh' / 'neutral' / 'model.npz')
-                # self.rest_pose = smplh_data['J'][:22, :]
+                # self.rest_pose = smplh_data['J'][:24, :]
 
             self.joint_norm = np.zeros((self.n_joints, 3))
             joint_length_sum = 0
@@ -176,10 +176,10 @@ class PoseSolver:
 
             joint_length[:, i] = np.sqrt(np.sum((jgp[:, i, :] - jgp[:, pi, :])**2, axis=-1))
 
-        joint_mean_length = np.zeros(22)
-        joint_nan_count = np.zeros(22)
+        joint_mean_length = np.zeros(24)
+        joint_nan_count = np.zeros(24)
 
-        for i in range(1, 22):
+        for i in range(1, 24):
             joint_nan_count[i] = np.sum(np.isnan(joint_length[:, i]))
             joint_mean_length[i] = PoseSolver.get_mean_without_outliers(joint_length[:, i])
 
@@ -208,7 +208,7 @@ class PoseSolver:
 
         scale = svd_length_sum / base_length_sum
 
-        for i in range(1, 22):
+        for i in range(1, 24):
             if i in scale_basis_joint_indices:
                 joint_mean_length[i] = np.clip(
                     joint_mean_length[i],

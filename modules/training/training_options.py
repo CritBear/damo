@@ -9,8 +9,10 @@ class TrainingOptions:
     def __init__(self):
         self.model_name = 'damo'
         self.model_comment = ''
-        self.dataset_names = ['SFU']
-        self.dataset_date = '20240326'
+        self.train_dataset_names = ['ACCAD', 'PosePrior', 'CMU']
+        self.test_dataset_names = ['SFU', 'SOMA']
+        self.dataset_date = '20240329'
+        self.load_batch_data = True
 
         # model setting
         self.n_joints = 24
@@ -54,18 +56,31 @@ class TrainingOptions:
 
         # processing
         self.common_dataset_path = Paths.datasets / 'common' / f'damo_common_{self.dataset_date}.pkl'
-        self.train_dataset_paths = [
-            Paths.datasets / 'train' / f'damo_train_{self.dataset_date}_{dataset_name}.pkl'
-            for dataset_name in self.dataset_names
-        ]
-        self.test_dataset_paths = [
-            Paths.datasets / 'test' / f'damo_test_{self.dataset_date}_{dataset_name}.pkl'
-            for dataset_name in self.dataset_names
-        ]
 
-        print(f"INFO | TrainOptions | Training datasets")
-        for path in self.train_dataset_paths:
-            print(f'\t{path}')
+        if self.load_batch_data:
+            self.train_dataset_paths = []
+            for dataset_name in self.train_dataset_names:
+                train_dataset_dir = Paths.datasets / 'batch' / self.dataset_date / dataset_name
+                self.train_dataset_paths += list(train_dataset_dir.glob('*.pkl'))
+
+            self.test_dataset_paths = []
+            for dataset_name in self.test_dataset_names:
+                test_dataset_dir = Paths.datasets / 'batch' / self.dataset_date / dataset_name
+                self.test_dataset_paths += list(test_dataset_dir.glob('*.pkl'))
+
+        else:
+            self.train_dataset_paths = [
+                Paths.datasets / 'train' / f'damo_train_{self.dataset_date}_{dataset_name}.pkl'
+                for dataset_name in self.train_dataset_names
+            ]
+            self.test_dataset_paths = [
+                Paths.datasets / 'test' / f'damo_test_{self.dataset_date}_{dataset_name}.pkl'
+                for dataset_name in self.test_dataset_names
+            ]
+
+        # print(f"INFO | TrainOptions | Training datasets")
+        # for path in self.train_dataset_paths:
+        #     print(f'\t{path}')
 
         self.start_time = f"{time.strftime('%y%m%d%H%M%S')}"
 
@@ -94,14 +109,21 @@ class TrainingOptions:
     def save_options(self, ext='json'):
         options = {}
         for k, v in self.__dict__.items():
+            if v is None or k in ['train_dataset_paths', 'test_dataset_paths']:
+                continue
             if isinstance(v, list):
-                options[k] = [str(item) for item in v]
+                options[k] = []
+                for item in v:
+                    if item is None:
+                        continue
+                    if not isinstance(item, int) and not isinstance(item, float) and not isinstance(item, bool):
+                        options[k].append(str(item))
+                    else:
+                        options[k].append(item)
+            elif not isinstance(v, int) and not isinstance(v, float) and not isinstance(v, bool):
+                options[k] = str(v)
             else:
-                try:
-                    str_v = str(v)
-                    options[k] = str_v
-                except (TypeError, ValueError):
-                    pass
+                options[k] = v
 
         if ext == 'json':
             with open(self.model_dir / 'options.json', 'w') as f:
@@ -135,5 +157,20 @@ def load_options_from_json(path):
 
     options.process_options()
     options.save_options(ext='json')
+
+    return options
+
+
+def load_options_from_json_for_inference(path):
+    with open(path, 'r') as f:
+        options_dict = json.load(f)
+
+    options = TrainingOptions()
+
+    for k, v in options_dict.items():
+        if hasattr(options, k):
+            setattr(options, k, v)
+        else:
+            ValueError(f'ERROR: Json has invalid key: {k}')
 
     return options
