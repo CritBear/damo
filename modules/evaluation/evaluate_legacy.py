@@ -1,6 +1,7 @@
 import sys
 import numpy as np
 import pickle
+import torch
 from tqdm import tqdm
 from scipy.signal import savgol_filter
 from scipy.spatial.transform import Rotation as R
@@ -8,7 +9,20 @@ from scipy.spatial.transform import Rotation as R
 from modules.utils.paths import Paths
 from modules.evaluation.score_manager import ScoreManager
 from modules.solver.quat_pose_solver_numpy import PoseSolver
+from modules.solver.pose_solver import find_bind_pose, find_pose
 from modules.utils.viewer.vpython_viewer import VpythonViewer as Viewer
+from modules.utils.functions import dict2class
+
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
+def to_cpu(tensor):
+    return tensor.detach().cpu().numpy()
+
+
+def to_gpu(ndarray):
+    return torch.Tensor(ndarray).to(device)
 
 
 def evaluate():
@@ -20,14 +34,16 @@ def evaluate():
     }
 
     eval_noise = {
-        'j': False,
+        'j': True,
         'jg': False,
         'jgo': False,
         'jgos': False,
         'real': True
     }
 
-    model_name = 'damo_240330034650_epc100'
+    # model_name = 'damo_240330034650_epc100'
+    model_name = 'DAMO'
+    test_data_dir = Paths.test_results / 'model_outputs'
 
     for dataset, b_dataset in eval_dataset.items():
         if not b_dataset:
@@ -37,13 +53,14 @@ def evaluate():
             if not b_noise:
                 continue
 
-            eval_data_path = Paths.datasets / 'evaluate' / 'legacy' / f'eval_data_damo-soma_{dataset}_{noise}.pkl'
+            eval_data_path = Paths.datasets / 'eval' / 'legacy' / f'eval_data_damo-soma_{dataset}_{noise}.pkl'
             with open(eval_data_path, 'rb') as f:
                 eval_data = pickle.load(f)
 
             body_shape_indices = eval_data['body_shape_index'] if noise != 'real' else None
 
-            test_data_path = Paths.test_results / 'model_outputs' / model_name / f'model_output_{eval_data_path.stem}.pkl'  # _model_output
+            # test_data_path = Paths.test_results / 'model_outputs' / model_name / f'model_output_{eval_data_path.stem}.pkl'  # _model_output
+            test_data_path = test_data_dir / model_name / f'{model_name}_{dataset}_{noise}.pkl'
             evaluate_entry(test_data_path, model_name, body_shape_indices)
 
 
@@ -53,7 +70,7 @@ def evaluate_entry(test_data_path, model_name, body_shape_indices):
     position_smoothing = False
     rotation_smoothing = False
     pre_motion_idx = 0
-    pre_n_frames = 400
+    pre_n_frames = 100
 
     file_name = test_data_path.stem
 
@@ -94,6 +111,11 @@ def evaluate_entry(test_data_path, model_name, body_shape_indices):
             'weights': [],  # [ (n_frames, n_max_markers, n_joints + 1) ]
             'offsets': [],  # [ (n_frames, n_max_markers, n_joints + 1, 3) ]
         }
+
+    smplh_neutral_path = Paths.support_data / 'body_models' / 'smplh' / 'neutral' / 'model.npz'
+    smplh_neutral = np.load(smplh_neutral_path)
+    smplh_neutral = dict2class(smplh_neutral)
+    base_bind_jgp = smplh_neutral.J
         
     for motion_idx in range(len(test_data)):
         if body_shape_indices is None:
@@ -109,39 +131,35 @@ def evaluate_entry(test_data_path, model_name, body_shape_indices):
         print(f"Solving... motion clip:[{motion_idx + 1}/{len(test_data)}]")
 
         motion = test_data[motion_idx]
-        points = motion['points']  # (n_frames, n_max_markers, 3)
-        indices = motion['indices']  # (n_frames, n_max_markers, n_joints + 1)
-        j3_weight = motion['weights']  # (n_frames, n_max_markers, 3)
-        j3_offset = motion['offsets']  # (n_frames, n_max_markers, 3, 3)
+        points = to_gpu(motion['points'])  # (n_frames, n_max_markers, 3)
+        indices = to_gpu(motion['indices'])  # (n_frames, n_max_markers, n_joints + 1)
+        j3_weight = to_gpu(motion['weight'])  # (n_frames, n_max_markers, 3)
+        j3_offset = to_gpu(motion['offset'])  # (n_frames, n_max_markers, 3, 3)
 
         n_frames = points.shape[0]
 
-        gt_jgp = motion['jgp'][0][:n_frames]  # (n_frames, n_joints, 3)
+        gt_jgp = to_gpu(motion['joint_global_positions'][0][:n_frames])  # (n_frames, n_joints, 3)
         # gt_jgr = clip['joint_global_rotations'][0][:n_frames]  # (n_frames, n_joints, 3, 3)
         # gt_jlp = motion['joint_local_positions'][0]# [-n_joints:]  # (n_joints, 3)
-        # print(gt_jlp.shape)
-        # return
-        gt_jlr = motion['jlr'][0][:n_frames]  # (n_frames, n_joints, 3, 3)
+        gt_jlr = to_gpu(motion['joint_local_rotations'][0][:n_frames])  # (n_frames, n_joints, 3, 3)
 
-        j3_indices = np.argsort(indices)[:, :, -1:-4:-1]
-        ja_weight = np.zeros((n_frames, n_max_markers, n_joints + 1))
-        ja_offset = np.zeros((n_frames, n_max_markers, n_joints + 1, 3))
+        j3_indices = torch.argsort(indices)[:, :, -1:-4:-1]
+        ja_weight = torch.zeros((n_frames, n_max_markers, n_joints + 1))
+        ja_offset = torch.zeros((n_frames, n_max_markers, n_joints + 1, 3))
 
         ja_weight[
-            np.arange(n_frames)[:, np.newaxis, np.newaxis],
-            np.arange(n_max_markers)[:, np.newaxis],
-            j3_indices.astype(np.int32)
+            torch.arange(n_frames)[:, None, None],
+            torch.arange(n_max_markers)[:, None],
+            j3_indices
         ] = j3_weight
 
         ja_offset[
-            np.arange(n_frames)[:, np.newaxis, np.newaxis],
-            np.arange(n_max_markers)[:, np.newaxis],
-            j3_indices.astype(np.int32)
+            torch.arange(n_frames)[:, None, None],
+            torch.arange(n_max_markers)[:, None],
+            j3_indices
         ] = j3_offset
 
-        solver = PoseSolver(topology=topology, gt_skeleton_template=None, max_iter=1)  # gt_jlp
-        if solver.skeleton_template is None:
-            skeleton_template = solver.build_skeleton_template(points=points, weight=ja_weight, offset=ja_offset)
+        bind_jlp = find_bind_pose(topology, base_bind_jgp, points, ja_weight, ja_offset)
 
         jgt_seq = []
         params_seq = []
@@ -200,10 +218,10 @@ def evaluate_entry(test_data_path, model_name, body_shape_indices):
         # vertex_global = np.sum(vertex_global * vertex_joint_weight[:, :, np.newaxis], axis=2)
 
         score_manager.calc_error(
-            jgt_seq[:, :22, :3, 3],
-            gt_jgp[start_frame:start_frame + n_frames, :22],
-            jlr_seq[:, :22],
-            gt_jlr[start_frame:start_frame + n_frames, :22]
+            jgt_seq[:, :, :3, 3],
+            gt_jgp[start_frame:start_frame + n_frames],
+            jlr_seq[:, :],
+            gt_jlr[start_frame:start_frame + n_frames]
         )
 
         jpe = score_manager.memory['jpe'][-1]

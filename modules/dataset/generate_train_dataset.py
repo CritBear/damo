@@ -92,6 +92,7 @@ def generate_dataset():
         caesar_bind_vn.append(compute_vertex_normal(v_tensor[i], f_tensor))
 
     j3_indices_tensor = to_gpu(j3_indices).to(torch.int32)
+
     caesar_j3_offsets = v_tensor[:, :, None, :] - caesar_bind_jgp[:, j3_indices_tensor, :]
 
     caesar_bind_vn = torch.stack(caesar_bind_vn, dim=0)
@@ -128,8 +129,8 @@ def generate_dataset():
     with open(common_dataset_path, 'wb') as f:
         pickle.dump(common_data.__dict__, f)
 
-    for dataset_name in raw_data_dirs:
-        generate_dataset_entry(dataset_name, common_data, date, save_batch_file)
+    # for dataset_name in raw_data_dirs:
+    #     generate_dataset_entry(dataset_name, common_data, date, save_batch_file)
 
 
 def generate_dataset_entry(dataset_name, common_data, date, save_batch_file=False):

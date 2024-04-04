@@ -66,6 +66,7 @@ class DamoTrainer:
             noise_shuffle=True,
             dist_from_skin=0.01,
             dist_augmentation=True,
+            z_rot_augmentation=True,
             test=False
         )
 
@@ -81,6 +82,7 @@ class DamoTrainer:
             noise_shuffle=True,
             dist_from_skin=0.01,
             dist_augmentation=True,
+            z_rot_augmentation=True,
             test=True
         )
 
@@ -96,6 +98,7 @@ class DamoTrainer:
             noise_shuffle=True,
             dist_from_skin=0.01,
             dist_augmentation=True,
+            z_rot_augmentation=False,
             test=True
         )
 

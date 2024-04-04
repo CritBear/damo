@@ -25,6 +25,7 @@ class DamoDataset(Dataset):
             noise_shuffle=False,
             dist_from_skin=0.01,
             dist_augmentation=False,
+            z_rot_augmentation=False,
             test=False
     ):
         super().__init__()
@@ -38,6 +39,7 @@ class DamoDataset(Dataset):
         self.noise_shuffle = noise_shuffle
         self.dist_from_skin = dist_from_skin
         self.dist_augmentation = dist_augmentation
+        self.z_rot_augmentation = z_rot_augmentation
         self.test = test
 
         assert self.seq_len % 2 == 1, ValueError(
@@ -235,16 +237,31 @@ class DamoDataset(Dataset):
         points_seq = torch.cat(points_seq, dim=0)
         points_mask = torch.cat(points_mask, dim=0)
 
-        items = {
-            'points_seq': points_seq,
-            'points_mask': points_mask,
-            'm_j_weights': padded_m_j_weights,
-            'm_j3_weights': padded_m_j3_weights,
-            'm_j3_offsets': padded_m_j3_offsets,
-            'motion_idx': mi,
-            'frame_idx': fi,
-            'real': True
-        }
+        if self.test:
+            items = {
+                'points_seq': points_seq,
+                'points_mask': points_mask,
+                'm_j_weights': padded_m_j_weights,
+                'm_j3_weights': padded_m_j3_weights,
+                'm_j3_offsets': padded_m_j3_offsets,
+                'motion_idx': mi,
+                'frame_idx': fi,
+                'real': True,
+                'poses': torch.from_numpy(self.poses[mi][fi]).to(torch.float32),
+                'trans': torch.from_numpy(self.jgp[mi][fi][0]).to(torch.float32),
+                'bind_jgp': torch.from_numpy(self.bind_jgp[mi]).to(torch.float32)
+            }
+        else:
+            items = {
+                'points_seq': points_seq,
+                'points_mask': points_mask,
+                'm_j_weights': padded_m_j_weights,
+                'm_j3_weights': padded_m_j3_weights,
+                'm_j3_offsets': padded_m_j3_offsets,
+                'motion_idx': mi,
+                'frame_idx': fi,
+                'real': True
+            }
 
         return items
 
@@ -284,23 +301,24 @@ class DamoDataset(Dataset):
         n_body = self.caesar_bind_v.shape[0]
         body_idx = random.randint(0, n_body - 1)
 
-        j3_offsets = self.caesar_v_j3_offsets[body_idx]
-        bind_vn = torch.from_numpy(self.caesar_bind_vn[body_idx]).to(torch.float32)
-        jgp_seq = torch.from_numpy(self.jgp[mi][si:ei]).to(torch.float32)
+        bind_jlp = torch.from_numpy(self.caesar_bind_jlp[body_idx]).to(torch.float32)
+        bind_jgp = torch.from_numpy(self.caesar_bind_jgp[body_idx]).to(torch.float32)
+        trans = torch.from_numpy(self.jgp[mi][si:ei, 0]).to(torch.float32)
         poses = torch.from_numpy(self.poses[mi][si:ei]).to(torch.float32)
-        jgr_seq = batch_rodrigues(poses.view(-1, 3)).view(ei-si, self.n_joints, 3, 3)
+        jlr_seq = batch_rodrigues(poses.view(-1, 3)).view(ei-si, self.n_joints, 3, 3)
+
+        jgt_seq = torch.eye(4).repeat(ei-si, self.n_joints, 1, 1)
+        jgt_seq[:, :, :3, :3] = jlr_seq
+        jgt_seq[:, :, :3, 3] = bind_jlp[None, :, :]
+        jgt_seq[:, 0, :3, 3] = trans
 
         for i, pi in enumerate(self.topology):
             if i == 0:
                 continue
-            jgr_seq[:, i] = jgr_seq[:, pi] @ jgr_seq[:, i]
+            jgt_seq[:, i] = jgt_seq[:, pi] @ jgt_seq[:, i]
 
-        theta = math.radians(random.uniform(0, 360))
-        aug_rot_mat = torch.tensor([
-            [math.cos(theta), -math.sin(theta), 0],
-            [math.sin(theta), math.cos(theta), 0],
-            [0, 0, 1]
-        ]).to(torch.float32)
+        jgp_seq = jgt_seq[:, :, :3, 3]
+        jgr_seq = jgt_seq[:, :, :3, :3]
 
         points_seq = []
         points_mask = []
@@ -331,31 +349,35 @@ class DamoDataset(Dataset):
 
             temp_marker_indices = torch.from_numpy(temp_marker_indices).to(torch.int32)
 
-            m_j3_indices = torch.from_numpy(self.v_j3_indices[temp_marker_indices, :]).to(torch.int32)
-            m_j3_weights = torch.from_numpy(self.v_j3_weights[temp_marker_indices, :]).to(torch.float32)
-            m_j3_offsets = torch.from_numpy(j3_offsets[temp_marker_indices, :, :]).to(torch.float32)
-
-            jgr = jgr_seq[i - si]
-            j3gr = jgr[m_j3_indices, :, :]
-            jgp = jgp_seq[i - si]
-            j3gp = jgp[m_j3_indices, :]
-
-            points = j3gr @ m_j3_offsets[:, :, :, None]
-            points = torch.squeeze(points)
-            points += j3gp
-            points = torch.sum(points * m_j3_weights[:, :, None], dim=1)
-
-            points_norm = j3gr @ bind_vn[temp_marker_indices, None, :, None]
-            points_norm = torch.sum(torch.squeeze(points_norm) * m_j3_weights[:, :, None], dim=1)
-
-            points += (points_norm * dist_from_skin)
-
-            n_clean_markers = len(temp_marker_indices)
+            bind_m = torch.from_numpy(self.caesar_bind_v[body_idx][temp_marker_indices]).to(torch.float32)
+            bind_mn = torch.from_numpy(self.caesar_bind_vn[body_idx][temp_marker_indices]).to(torch.float32)
+            bind_disp_m = bind_m + bind_mn * dist_from_skin  # [m, 3]
 
             if self.noise_jitter:
                 jitter_range = 0.01
-                jitter = (torch.rand_like(points) - 0.5) * jitter_range
-                points += jitter
+                jitter = (torch.rand_like(bind_disp_m) - 0.5) * jitter_range
+                bind_disp_m += jitter
+
+            m_j3_indices = torch.from_numpy(self.v_j3_indices[temp_marker_indices, :]).to(torch.int32)
+            # [m, 3]
+
+            m_j3_weights = torch.from_numpy(self.v_j3_weights[temp_marker_indices, :]).to(torch.float32)
+            # [m, 3]
+
+            m_j3_offsets = bind_disp_m[:, None, :] - bind_jgp[m_j3_indices]
+            # [m, 3, 3]
+
+            jgr = jgr_seq[i - si]  # [j, 3, 3]
+            j3gr = jgr[m_j3_indices, :, :]  # [m, 3, 3, 3]
+            jgp = jgp_seq[i - si]  # [j, 3]
+            j3gp = jgp[m_j3_indices, :]  # [m, 3, 3]
+
+            points = j3gr @ m_j3_offsets[:, :, :, None]  # [m, 3, 3, 1]
+            points = torch.squeeze(points)  # [m, 3, 3]
+            points += j3gp  # [m, 3, 3]
+            points = torch.sum(points * m_j3_weights[:, :, None], dim=1)  # [m, 3]
+
+            n_clean_markers = len(temp_marker_indices)
 
             if self.noise_ghost:
                 max_ghost_markers = 2
@@ -435,17 +457,39 @@ class DamoDataset(Dataset):
         points_seq = torch.cat(points_seq, dim=0)
         points_mask = torch.cat(points_mask, dim=0)
 
-        points_seq = torch.matmul(points_seq, aug_rot_mat)
+        if self.z_rot_augmentation:
+            theta = math.radians(random.uniform(0, 360))
+            aug_rot_mat = torch.tensor([
+                [math.cos(theta), -math.sin(theta), 0],
+                [math.sin(theta), math.cos(theta), 0],
+                [0, 0, 1]
+            ]).to(torch.float32)
+            points_seq = torch.matmul(points_seq, aug_rot_mat)
 
-        items = {
-            'points_seq': points_seq,
-            'points_mask': points_mask,
-            'm_j_weights': padded_m_j_weights,
-            'm_j3_weights': padded_m_j3_weights,
-            'm_j3_offsets': padded_m_j3_offsets,
-            'motion_idx': mi,
-            'frame_idx': fi,
-            'real': False
-        }
+        if self.test:
+            items = {
+                'points_seq': points_seq,
+                'points_mask': points_mask,
+                'm_j_weights': padded_m_j_weights,
+                'm_j3_weights': padded_m_j3_weights,
+                'm_j3_offsets': padded_m_j3_offsets,
+                'motion_idx': mi,
+                'frame_idx': fi,
+                'real': False,
+                'poses': torch.from_numpy(self.poses[mi][fi]).to(torch.float32),
+                'trans': torch.from_numpy(self.jgp[mi][fi][0]).to(torch.float32),
+                'bind_jgp': torch.from_numpy(self.caesar_bind_jgp[body_idx]).to(torch.float32)
+            }
+        else:
+            items = {
+                'points_seq': points_seq,
+                'points_mask': points_mask,
+                'm_j_weights': padded_m_j_weights,
+                'm_j3_weights': padded_m_j3_weights,
+                'm_j3_offsets': padded_m_j3_offsets,
+                'motion_idx': mi,
+                'frame_idx': fi,
+                'real': False
+            }
 
         return items

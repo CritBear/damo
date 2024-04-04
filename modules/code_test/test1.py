@@ -46,11 +46,11 @@ from modules.utils.paths import Paths
 #         ghost_marker_indices = torch.cat((nan_indices, far_indices)).unique()
 
 # d_path = Paths.datasets / 'Stefanos_1os_antrikos_karsilamas_C3D_poses.npz'
-d_path = r'D:\Projects\DAMO\damo\datasets\raw\SOMA\soma_subject1\clap_001_stageii.npz'
-d = np.load(d_path, allow_pickle=True)
+d_path = Paths.datasets / 'evaluate/legacy/eval_data_damo-soma_MoSh_real.pkl'
+# d = np.load(d_path, allow_pickle=True)
 
-# with open(d_path, 'rb') as f:
-#     d = pickle.load(f)
+with open(d_path, 'rb') as f:
+    d = pickle.load(f)
 
 for i in d:
     print(i, end='\t')
