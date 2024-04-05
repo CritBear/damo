@@ -57,7 +57,6 @@ class DamoDataset(Dataset):
         self.caesar_bind_vn = common_data['caesar_bind_vn']
         self.caesar_bind_jgp = common_data['caesar_bind_jgp']
         self.caesar_bind_jlp = common_data['caesar_bind_jlp']
-        self.caesar_v_j3_offsets = common_data['caesar_v_j3_offsets']
         self.v_j3_indices = common_data['v_j3_indices']
         self.v_j3_weights = common_data['v_j3_weights']
 

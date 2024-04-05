@@ -2,6 +2,7 @@ import time
 import torch
 import json
 import argparse
+from pathlib import Path
 
 from modules.utils.paths import Paths
 
@@ -13,6 +14,7 @@ class TrainingOptions:
         self.test_dataset_names = ['SFU', 'SOMA']
         self.dataset_date = '20240329'
         self.load_batch_data = True
+        self.use_seraph = False
 
         # model setting
         self.n_joints = 24
@@ -55,26 +57,31 @@ class TrainingOptions:
         print(f"INFO | TrainOptions | Device: {self.device}")
 
         # processing
-        self.common_dataset_path = Paths.datasets / 'common' / f'damo_common_{self.dataset_date}.pkl'
+        if self.use_seraph:
+            data_path = Path('/local_datasets')
+        else:
+            data_path = Paths.datasets
+
+        self.common_dataset_path = data_path / 'common' / f'damo_common_{self.dataset_date}.pkl'
 
         if self.load_batch_data:
             self.train_dataset_paths = []
             for dataset_name in self.train_dataset_names:
-                train_dataset_dir = Paths.datasets / 'batch' / self.dataset_date / dataset_name
+                train_dataset_dir = data_path / 'batch' / self.dataset_date / dataset_name
                 self.train_dataset_paths += list(train_dataset_dir.glob('*.pkl'))
 
             self.test_dataset_paths = []
             for dataset_name in self.test_dataset_names:
-                test_dataset_dir = Paths.datasets / 'batch' / self.dataset_date / dataset_name
+                test_dataset_dir = data_path / 'batch' / self.dataset_date / dataset_name
                 self.test_dataset_paths += list(test_dataset_dir.glob('*.pkl'))
 
         else:
             self.train_dataset_paths = [
-                Paths.datasets / 'train' / f'damo_train_{self.dataset_date}_{dataset_name}.pkl'
+                data_path / 'train' / f'damo_train_{self.dataset_date}_{dataset_name}.pkl'
                 for dataset_name in self.train_dataset_names
             ]
             self.test_dataset_paths = [
-                Paths.datasets / 'test' / f'damo_test_{self.dataset_date}_{dataset_name}.pkl'
+                data_path / 'test' / f'damo_test_{self.dataset_date}_{dataset_name}.pkl'
                 for dataset_name in self.test_dataset_names
             ]
 

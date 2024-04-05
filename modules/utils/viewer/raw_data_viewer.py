@@ -40,7 +40,7 @@ axis_z = arrow(pos=vector(0, 0, 0), axis=vector(0, 0, 1), shaftwidth=0.05, color
 window.forward = vector(-1, 0, 0)
 window.up = vector(0, 0, 1)
 
-dataset_name = 'CMU'
+dataset_name = 'ACCAD'
 data_dir = Paths.datasets / 'raw' / dataset_name
 c3d_files = list(data_dir.rglob('*.c3d'))
 npz_files = list(data_dir.rglob('*.npz'))

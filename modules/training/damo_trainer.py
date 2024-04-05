@@ -59,7 +59,7 @@ class DamoTrainer:
             dataset_paths=options.train_dataset_paths,
             n_max_markers=options.n_max_markers,
             seq_len=options.seq_len,
-            r_ss_ds_ratio=[0.5, 0.25, 0.25],
+            r_ss_ds_ratio=[0, 0.5, 0.5],
             noise_jitter=True,
             noise_ghost=True,
             noise_occlusion=True,
@@ -107,7 +107,7 @@ class DamoTrainer:
             batch_size=options.batch_size,
             shuffle=True,
             drop_last=True,
-            num_workers=6,
+            num_workers=2,
             pin_memory=True,
             worker_init_fn=DamoTrainer.seed_worker
         )
@@ -117,7 +117,7 @@ class DamoTrainer:
             batch_size=options.batch_size,
             shuffle=False,
             drop_last=True,
-            num_workers=6,
+            num_workers=2,
             pin_memory=True,
             worker_init_fn=DamoTrainer.seed_worker
         )
@@ -127,7 +127,7 @@ class DamoTrainer:
             batch_size=options.batch_size,
             shuffle=False,
             drop_last=True,
-            num_workers=6,
+            num_workers=2,
             pin_memory=True,
             worker_init_fn=DamoTrainer.seed_worker
         )

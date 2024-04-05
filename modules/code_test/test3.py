@@ -138,24 +138,23 @@ for i in range(len(data)):
         jgt[j] = torch.matmul(jgt[pi], jgt[j])
     jgp = jgt[:, :3, 3]
 
-    virtual_points = test_lbs(jgt, j_weights, j_offsets)
+    # virtual_points = test_lbs(jgt, j_weights, j_offsets)
 
-    # params, jgt, virtual_points = find_pose(topology, bind_jlp, points, j_weights, j_offsets)
-    # jgr = jgt[:, :3, :3]
-    # jgp = jgt[:, :3, 3]
-
+    params, jgt, virtual_points = find_pose(topology, bind_jlp, points, j_weights, j_offsets)
+    jgr = jgt[:, :3, :3]
+    jgp = jgt[:, :3, 3]
 
     while True:
-        for i in range(n_joints):
-            v_joints[i].pos = vector(*jgp[i])
+        for j in range(n_joints):
+            v_joints[j].pos = vector(*jgp[j])
 
-        for i in range(1, n_joints):
-            v_bones[i - 1].pos = v_joints[i].pos
-            v_bones[i - 1].axis = (v_joints[topology[i]].pos - v_joints[i].pos)
+        for j in range(1, n_joints):
+            v_bones[j - 1].pos = v_joints[j].pos
+            v_bones[j - 1].axis = (v_joints[topology[j]].pos - v_joints[j].pos)
 
-        for i in range(n_max_markers):
-            v_markers[i].pos = vector(*points[i])
-            v_vmarkers[i].pos = vector(*virtual_points[i])
+        for j in range(n_max_markers):
+            v_markers[j].pos = vector(*points[j])
+            v_vmarkers[j].pos = vector(*virtual_points[j])
 
         if keyboard.is_pressed('right'):
             break
