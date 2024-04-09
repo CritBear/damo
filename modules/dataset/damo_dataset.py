@@ -57,7 +57,6 @@ class DamoDataset(Dataset):
         self.caesar_bind_vn = common_data['caesar_bind_vn']
         self.caesar_bind_jgp = common_data['caesar_bind_jgp']
         self.caesar_bind_jlp = common_data['caesar_bind_jlp']
-        self.caesar_v_j3_offsets = common_data['caesar_v_j3_offsets']
         self.v_j3_indices = common_data['v_j3_indices']
         self.v_j3_weights = common_data['v_j3_weights']
 
@@ -383,7 +382,7 @@ class DamoDataset(Dataset):
                 max_ghost_markers = 2
                 n_ghost_markers = torch.randint(-max_ghost_markers, max_ghost_markers + 1, (1,)).item()
                 n_ghost_markers = max(0, n_ghost_markers)
-                points_center = points.mean(axis=0)
+                points_center = points.mean(dim=0)
                 ghost_markers_range = 1
                 ghost_markers = (torch.rand(n_ghost_markers, points.shape[-1]) - 0.5) * ghost_markers_range
                 ghost_markers = ghost_markers + points_center

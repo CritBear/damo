@@ -25,8 +25,9 @@ class TrainingOptions:
 
         # training setting
         self.use_model_load = False
-        self.loading_model_name = ""
-        self.loading_model_epoch = 0
+        self.loading_model_name = "damo_240404153143"
+        self.loading_model_epoch = 130
+        self.loading_model_path = None
 
         self.seed = 2024  # or None
         self.n_epochs = 200
@@ -56,6 +57,9 @@ class TrainingOptions:
 
         # processing
         self.common_dataset_path = Paths.datasets / 'common' / f'damo_common_{self.dataset_date}.pkl'
+
+        if self.use_model_load:
+            self.loading_model_path = Paths.trained_models / self.loading_model_name / f'{self.loading_model_name}_epc{self.loading_model_epoch}.pt'
 
         if self.load_batch_data:
             self.train_dataset_paths = []

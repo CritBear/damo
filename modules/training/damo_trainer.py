@@ -133,12 +133,19 @@ class DamoTrainer:
         )
 
         model = Damo(options).to(options.device)
+
+        if options.use_model_load:
+            model.load_state_dict(torch.load(options.loading_model_path))
+            start_epoch = options.loading_model_epoch
+        else:
+            start_epoch = 0
+
         optimizer = torch.optim.Adam(model.parameters())
 
         writer = SummaryWriter(options.log_dir / options.model_name)
         print(f"INFO | Train | Tensorboard command: tensorboard --logdir={Paths.trained_models}")
 
-        for epoch in range(options.n_epochs):
+        for epoch in range(start_epoch, options.n_epochs):
             model.train()
             train_iterator = tqdm(
                 enumerate(train_dataloader), total=len(train_dataloader), desc="train"

@@ -6,14 +6,13 @@ import pickle
 import gc
 import torch
 import torch.multiprocessing as mp
-import c3d
 from datetime import datetime
 from tqdm import tqdm
 
 from modules.solver.bind_pose_marker_solver import find_bind_mgp
 from modules.utils.paths import Paths
 from modules.utils.dfaust_utils import compute_vertex_normal
-from modules.utils.functions import dict2class
+from modules.utils.functions import dict2class, read_c3d_markers
 from human_body_prior.body_model.body_model_prior import BodyModel
 from human_body_prior.body_model.lbs import batch_rodrigues
 
@@ -33,6 +32,7 @@ import keyboard
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 cpu = torch.device('cpu')
+
 
 def to_cpu(tensor):
     return tensor.detach().cpu().numpy()
@@ -93,13 +93,10 @@ def generate_dataset():
 
     j3_indices_tensor = to_gpu(j3_indices).to(torch.int32)
 
-    caesar_j3_offsets = v_tensor[:, :, None, :] - caesar_bind_jgp[:, j3_indices_tensor, :]
-
     caesar_bind_vn = torch.stack(caesar_bind_vn, dim=0)
     caesar_bind_vn = to_cpu(caesar_bind_vn)
     caesar_bind_jgp = to_cpu(caesar_bind_jgp)
     caesar_bind_jlp = to_cpu(caesar_bind_jlp)
-    caesar_j3_offsets = to_cpu(caesar_j3_offsets)
 
     with open(Paths.support_data / 'soma_superset_variation.pkl', 'rb') as f:
         soma_superset_variant = pickle.load(f)
@@ -114,7 +111,6 @@ def generate_dataset():
         'caesar_bind_vn': caesar_bind_vn,
         'caesar_bind_jgp': caesar_bind_jgp,
         'caesar_bind_jlp': caesar_bind_jlp,
-        'caesar_v_j3_offsets': caesar_j3_offsets,
         'soma_superset_variant': soma_superset_variant,
         'j_v_idx': j_m_idx,
         'v_j3_indices': j3_indices,
@@ -687,17 +683,6 @@ def test(**kwargs):
 
         # f += 1
         time.sleep(1 / 60)
-
-def read_c3d_markers(file_path):
-    reader = c3d.Reader(open(file_path, 'rb'))
-    marker_data = []
-
-    for i, points, analog in reader.read_frames():
-        marker_data.append(points)
-
-    marker_data = np.array(marker_data)
-
-    return marker_data[:, :, :3]
 
 
 if __name__ == '__main__':

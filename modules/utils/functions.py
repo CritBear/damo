@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import c3d
 
 
 def dict2class(res):
@@ -11,6 +12,18 @@ def dict2class(res):
         res_class.__setattr__(k, v)
 
     return res_class
+
+
+def read_c3d_markers(file_path):
+    reader = c3d.Reader(open(file_path, 'rb'))
+    marker_data = []
+
+    for i, points, analog in reader.read_frames():
+        marker_data.append(points)
+
+    marker_data = np.array(marker_data)
+
+    return marker_data[:, :, :3]
 
 
 def x_rot_mat(deg, use_torch=True):

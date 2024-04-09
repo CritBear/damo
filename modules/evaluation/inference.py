@@ -14,21 +14,22 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 def inference():
     eval_dataset = {
         'HDM05': True,
-        'SFU': False,
-        'Mosh': False,
-        'SOMA': False
+        'SFU': True,
+        'Mosh': True,
+        'SOMA': True
     }
 
     eval_noise = {
-        'j': False,
-        'jg': False,
-        'jgo': False,
-        'jgos': False,
+        'j': True,
+        'jg': True,
+        'jgo': True,
+        'jgos': True,
         'real': True
     }
 
-    model_name = 'damo_240330034650'
-    epoch = '100'
+    model_name = 'damo_240404153143'
+    epoch = '120'
+    eval_data_date = '20240408'
     model_dir = Paths.trained_models / model_name
 
     model_path = model_dir / f'{model_name}_epc{epoch}.pt'
@@ -47,98 +48,93 @@ def inference():
         if not b_dataset:
             continue
 
+        eval_data_path = Paths.datasets / 'eval' / f'damo_eval_{dataset}_{eval_data_date}.pkl'
+        with open(eval_data_path, 'rb') as f:
+            eval_data = pickle.load(f)
+
         for noise, b_noise in eval_noise.items():
             if not b_noise:
                 continue
 
-            inference_entry(model, dataset, noise, output_dir)
+            inference_entry(model, eval_data, dataset, noise)
+
+        output_path = output_dir / f'model_output_{eval_data_path.stem}.pkl'
+        with open(output_path, 'wb') as f:
+            pickle.dump(eval_data, f)
 
 
-def inference_entry(model, dataset, noise, output_dir):
-    is_real_marker = True if noise == 'real' else False
-    marker_type = 'real' if is_real_marker else 'synthetic'
+def inference_entry(model, eval_data, dataset, noise):
+    is_real = True if noise == 'real' else False
+
+    if is_real:
+        eval_data['real_indices_pred'] = []
+        eval_data['real_weights_pred'] = []
+        eval_data['real_offsets_pred'] = []
+        points_seq = eval_data['real']
+    else:
+        eval_data[f'synthetic_{noise}_indices_pred'] = []
+        eval_data[f'synthetic_{noise}_weights_pred'] = []
+        eval_data[f'synthetic_{noise}_offsets_pred'] = []
+        points_seq = eval_data[f'synthetic_{noise}']
 
     print('')
     print(f'eval_data_{dataset}_{noise}')
 
-    eval_data_path = Paths.datasets / 'evaluate' / 'legacy' / f'eval_data_damo-soma_{dataset}_{noise}.pkl'
-    with open(eval_data_path, 'rb') as f:
-        eval_data = pickle.load(f)
+    batch_size = model.options.batch_size
+    n_max_markers = model.options.n_max_markers
+    seq_len = model.options.seq_len
 
-    total_sample = []
     with torch.no_grad():
-        n_files = len(eval_data[f'{marker_type}_marker'])
+        n_files = len(points_seq)
         for fi in range(n_files):
-            sample = {
-                'points': [],
-                'indices': [],
-                'weights': [],
-                'offsets': [],
-                'jgp': [],
-                'bind_jlp': [],
-                'jlr': []
-            }
-            sample['jgp'].append(eval_data['joint_global_positions'][fi])
-            # sample['bind_jlp'].append(eval_data['joint_local_positions'][fi])
-            sample['jlr'].append(eval_data['joint_local_rotations'][fi])
+            n_frames = points_seq[fi].shape[0]
 
-            n_frames = eval_data[f'{marker_type}_marker'][fi].shape[0]
-
-            batch_size = model.options.batch_size
+            indices = []
+            weights = []
+            offsets = []
 
             for bi in range(n_frames // batch_size):
                 print(f"\rInfer... [{fi + 1}/{n_files}][{bi + 1}/{n_frames // batch_size}]", end='')
-                padded_points = np.zeros((batch_size, 7, 90, 3))
-                mask = np.zeros((batch_size, 7, 90))
+                padded_points = np.zeros((batch_size, seq_len, n_max_markers, 3))
+                mask = np.zeros((batch_size, seq_len, n_max_markers))
 
                 for b in range(batch_size):
-                    for s in range(-3, 4):
+                    for s in range(-(seq_len//2), (seq_len//2)+1):
                         f = bi * batch_size + b + s
-                        if f >= 0 and f < n_frames:
-                            if is_real_marker:
-                                points = eval_data['real_marker'][fi][f, :, :]
-                                mag = np.linalg.norm(points, axis=1)
-                                filtered_points = points[mag > 0.001]
+                        if 0 <= f < n_frames:
+                            points = points_seq[fi][f, :, :]
+                            mag = np.linalg.norm(points, axis=1)
+                            filtered_points = points[mag > 0.001]
 
-                                # number of real valid markers
-                                n_rvm = min(filtered_points.shape[0], 90)
+                            # number of real valid markers
+                            n_rvm = min(filtered_points.shape[0], n_max_markers)
 
-                                padded_points[b, s, :n_rvm, :] = filtered_points[:n_rvm, :]
-                                mask[b, s, :n_rvm] = 1
-                            else:
-                                n_synthetic_markers = int(eval_data['synthetic_marker_num'][fi][f])
-                                points = eval_data['synthetic_marker'][fi][f, :n_synthetic_markers, :]
-                                mag = np.linalg.norm(points, axis=1)
-                                filtered_points = points[mag > 0.001]
-
-                                n_rvm = min(filtered_points.shape[0], 90)
-
-                                padded_points[b, s, :n_rvm, :] = filtered_points[:n_rvm, :]
-                                mask[b, s, :n_rvm] = 1
-
-                if is_real_marker:
-                    padded_points /= 1000
+                            padded_points[b, s, :n_rvm, :] = filtered_points[:n_rvm, :]
+                            mask[b, s, :n_rvm] = 1
 
                 padded_points = torch.from_numpy(padded_points).to(device).to(torch.float32)
                 mask = torch.from_numpy(mask).to(device).to(torch.float32)
-                indices_pred, weight_pred, offset_pred = model(padded_points, mask)
+                indices_pred, weights_pred, offsets_pred = model(padded_points, mask)
 
-                sample['points'].append(padded_points.cpu().numpy()[:, 3, :, :])
-                sample['indices'].append(indices_pred.cpu().numpy())
-                sample['weights'].append(weight_pred.cpu().numpy())
-                sample['offsets'].append(offset_pred.cpu().numpy())
+                indices.append(indices_pred)
+                weights.append(weights_pred)
+                offsets.append(offsets_pred)
 
-            if len(sample['points']) > 0:
-                sample['points'] = np.vstack(sample['points'])
-                sample['indices'] = np.vstack(sample['indices'])
-                sample['weights'] = np.vstack(sample['weights'])
-                sample['offsets'] = np.vstack(sample['offsets'])
+            indices = torch.cat(indices, dim=0).cpu().numpy()
+            weights = torch.cat(weights, dim=0).cpu().numpy()
+            offsets = torch.cat(offsets, dim=0).cpu().numpy()
 
-                total_sample.append(sample)
+            assert indices.shape[0] == (n_frames // batch_size) * batch_size, \
+                f'{indices.shape[0]} | {(n_frames // batch_size) * batch_size}'
 
-    output_path = output_dir / f'model_output_{eval_data_path.stem}.pkl'
-    with open(output_path, 'wb') as f:
-        pickle.dump(total_sample, f)
+            if is_real:
+                eval_data['real_indices_pred'].append(indices)
+                eval_data['real_weights_pred'].append(weights)
+                eval_data['real_offsets_pred'].append(offsets)
+            else:
+                eval_data[f'synthetic_{noise}_indices_pred'].append(indices)
+                eval_data[f'synthetic_{noise}_weights_pred'].append(weights)
+                eval_data[f'synthetic_{noise}_offsets_pred'].append(offsets)
 
 
 if __name__ == '__main__':

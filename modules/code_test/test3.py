@@ -11,12 +11,20 @@ from modules.network.damo import Damo
 from modules.utils.functions import dict2class
 from modules.solver.pose_solver import find_bind_pose, find_pose, test_lbs
 from human_body_prior.body_model.lbs import batch_rodrigues
+from modules.solver.quat_pose_solver_numpy import PoseSolver
 
 import time
 import keyboard
 import vpython.no_notebook
-from vpython import canvas, sphere, vector, color, cylinder, arrow, text
+from vpython import canvas, sphere, vector, color, cylinder, arrow, text, label
 
+
+seed = 2023
+random.seed(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 json_path = Paths.support_data / "train_options.json"
 options = load_options_from_json(json_path)
@@ -63,28 +71,55 @@ v_markers = [
     for i in range(n_max_markers)
 ]
 
+v_bind_markers = [
+    sphere(radius=0.01, color=color.green)
+    for i in range(n_max_markers)
+]
+
+v_weight_labels = [
+    label()
+    for i in range(n_max_markers)
+]
+
 v_vmarkers = [
     sphere(radius=0.01, color=color.blue)
     for i in range(n_max_markers)
 ]
 
 v_joints = [
+    sphere(radius=0.02, color=color.white)
+    for i in range(n_joints)
+]
+
+v_gt_joints = [
     sphere(radius=0.02, color=color.orange)
     for i in range(n_joints)
 ]
+
+v_joints_label = [
+    label()
+    for i in range(n_joints)
+]
+
 v_bones = [
+    cylinder(radius=0.01,
+             color=color.white)
+    for i in range(1, n_joints)
+]
+
+v_gt_bones = [
     cylinder(radius=0.01,
              color=color.orange)
     for i in range(1, n_joints)
 ]
 
 v_bind_joints = [
-    sphere(radius=0.02, color=color.orange)
+    sphere(radius=0.02, color=color.white)
     for i in range(n_joints)
 ]
 v_bind_bones = [
     cylinder(radius=0.01,
-             color=color.orange)
+             color=color.white)
     for i in range(1, n_joints)
 ]
 
@@ -105,57 +140,103 @@ for i in range(len(data)):
     topology = torch.Tensor([-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19, 20, 21]).to(torch.int32)
     topology = topology.to(device)
 
-    j3_indices = torch.argsort(indices, dim=-1, descending=True)[..., :3]
-    j_weights = torch.zeros(n_max_markers, n_joints + 1).to(device)
-    j_offsets = torch.zeros(n_max_markers, n_joints + 1, 3).to(device)
+    j3_indices = torch.argsort(indices, dim=-1, descending=True)[..., :3]  # [m, 3]
+    j_weights = torch.zeros(n_max_markers, n_joints + 1).to(device)  # [m, j+1]
+    j_offsets = torch.zeros(n_max_markers, n_joints + 1, 3).to(device)  # [m, j+1, 3]
 
     j_weights[
         torch.arange(n_max_markers)[:, None],
         j3_indices
     ] = j3_weights
-    j_weights = j_weights[:, :n_joints]
+    j_weights = j_weights[:, :n_joints]  # [m, j]
 
     j_offsets[
         torch.arange(n_max_markers)[:, None],
         j3_indices
     ] = j3_offsets
-    j_offsets = j_offsets[:, :n_joints]
+    j_offsets = j_offsets[:, :n_joints]  # [m, j, 3]
+
+    for j in range(n_max_markers):
+        if j3_indices[j][0] == n_joints:
+            j3_indices[j][0] = 0
+            j_weights[j] = 0
+            j_offsets[j] = 0
+
+        if j3_indices[j][1] == n_joints:
+            j3_indices[j][1] = 0
+
+        if j3_indices[j][2] == n_joints:
+            j3_indices[j][2] = 0
+
+    # j3_indices = np.argsort(indices.cpu().numpy())[:, -1:-4:-1]
+    # ja_weight = np.zeros((n_max_markers, n_joints + 1))
+    # ja_offset = np.zeros((n_max_markers, n_joints + 1, 3))
+    # ja_weight[
+    #     np.arange(n_max_markers)[:, np.newaxis],
+    #     j3_indices.astype(np.int32)
+    # ] = j3_weights.cpu().numpy()
+    #
+    # ja_offset[
+    #     np.arange(n_max_markers)[:, np.newaxis],
+    #     j3_indices.astype(np.int32)
+    # ] = j3_offsets.cpu().numpy()
 
     bind_jlp = torch.zeros(n_joints, 3).to(device)
     bind_jlp[1:] = bind_jgp[1:] - bind_jgp[topology[1:]]
 
-    jgt = torch.eye(4).repeat(n_joints, 1, 1).to(device)
-    jlr = batch_rodrigues(poses.view(-1, 3)).view(-1, 3, 3)
-    jgt[:, :3, 3] = bind_jlp
-    jgt[0, :3, 3] = trans
-    jgt[:, :3, :3] = jlr
+    bind_mgp = j_offsets + bind_jgp[None, :, :]
+    bind_mgp = torch.sum(bind_mgp * j_weights[:, :, None], dim=1)
+
+    gt_jgt = torch.eye(4).repeat(n_joints, 1, 1).to(device)
+    gt_jlr = batch_rodrigues(poses.view(-1, 3)).view(-1, 3, 3)
+    gt_jgt[:, :3, 3] = bind_jlp
+    gt_jgt[0, :3, 3] = trans
+    gt_jgt[:, :3, :3] = gt_jlr
+
+    print(poses.view(-1, 3)[0])
 
     for j, pi in enumerate(topology):
         if j == 0:
             assert pi == -1
             continue
 
-        jgt[j] = torch.matmul(jgt[pi], jgt[j])
+        gt_jgt[j] = torch.matmul(gt_jgt[pi], gt_jgt[j])
+    gt_jgp = gt_jgt[:, :3, 3]
+    #
+    #
+    # virtual_points = test_lbs(jgt, j_weights, j_offsets)
+
+    # solver = PoseSolver(topology=topology.cpu().numpy(), gt_skeleton_template=bind_jlp.cpu().numpy())
+    # param, jgt = solver.solve(points.cpu().numpy(), ja_weight[:, :n_joints], ja_offset[:, :n_joints])
+    # virtual_points = solver.lbs(jgt, ja_weight[:, :n_joints], ja_offset[:, :n_joints])
+
+    params, jgt, virtual_points = find_pose(topology, bind_jlp, points, j_weights, j_offsets)
+    jgr = jgt[:, :3, :3]
     jgp = jgt[:, :3, 3]
 
-    virtual_points = test_lbs(jgt, j_weights, j_offsets)
-
-    # params, jgt, virtual_points = find_pose(topology, bind_jlp, points, j_weights, j_offsets)
-    # jgr = jgt[:, :3, :3]
-    # jgp = jgt[:, :3, 3]
-
-
     while True:
-        for i in range(n_joints):
-            v_joints[i].pos = vector(*jgp[i])
+        for j in range(n_joints):
+            v_joints[j].pos = vector(*jgp[j])
+            v_gt_joints[j].pos = vector(*gt_jgp[j])
+            v_bind_joints[j].pos = vector(*bind_jgp[j])
+            v_joints_label[j].pos = v_bind_joints[j].pos
+            v_joints_label[j].text = f'{j}'
 
-        for i in range(1, n_joints):
-            v_bones[i - 1].pos = v_joints[i].pos
-            v_bones[i - 1].axis = (v_joints[topology[i]].pos - v_joints[i].pos)
+        for j in range(1, n_joints):
+            v_bones[j - 1].pos = v_joints[j].pos
+            v_bones[j - 1].axis = (v_joints[topology[j]].pos - v_joints[j].pos)
+            v_gt_bones[j - 1].pos = v_gt_joints[j].pos
+            v_gt_bones[j - 1].axis = (v_gt_joints[topology[j]].pos - v_gt_joints[j].pos)
+            v_bind_bones[j - 1].pos = v_bind_joints[j].pos
+            v_bind_bones[j - 1].axis = (v_bind_joints[topology[j]].pos - v_bind_joints[j].pos)
 
-        for i in range(n_max_markers):
-            v_markers[i].pos = vector(*points[i])
-            v_vmarkers[i].pos = vector(*virtual_points[i])
+        for j in range(n_max_markers):
+            v_markers[j].pos = vector(*points[j])
+            v_vmarkers[j].pos = vector(*virtual_points[j])
+            v_bind_markers[j].pos = vector(*bind_mgp[j])
+            v_weight_labels[j].pos = v_bind_markers[j].pos
+            v_weight_labels[j].text = (f'{j3_indices[j][0]},{j3_indices[j][1]},{j3_indices[j][2]}\n'
+                                       f'{j3_weights[j][0]:.2f},{j3_weights[j][1]:.2f},{j3_weights[j][2]:.2f}')
 
         if keyboard.is_pressed('right'):
             break

@@ -1,7 +1,9 @@
 import torch
 from dataclasses import dataclass
 from typing import Callable
+from scipy.spatial.transform import Rotation as R
 
+from human_body_prior.body_model.lbs import batch_rodrigues
 from modules.utils.paths import Paths
 from modules.solver.svd_solver import SVD_Solver
 from modules.utils.functions import x_rot_mat, y_rot_mat, z_rot_mat
@@ -22,77 +24,93 @@ def find_bind_pose(topology, base_bind_jgp, points, weights, offsets, gp=False):
     n_joints = topology.shape[0]
     svd_solver = SVD_Solver(n_joints)
 
-    # Only use translation
-    jgp = svd_solver(points, weights, offsets)[..., 3]
-
-    bone_lengths = [torch.zeros(n_frames) for _ in range(n_joints)]
-    for i, pi in enumerate(topology):
-        if i == 0:
-            assert pi == -1
-            continue
-
-        bone_lengths[i] = torch.linalg.norm(jgp[:, i] - jgp[:, pi], dim=-1)
-
-    bone_lengths_mean = torch.zeros(n_joints)
-    bone_lengths_std = torch.zeros(n_joints)
-    bone_lengths_n_nan = torch.zeros(n_joints)
-
-    for i in range(n_joints):
-        bone_lengths[i] = bone_lengths[i][~bone_lengths[i].isnan()]
-        bone_lengths_n_nan[i] = n_frames - bone_lengths[i].shape[0]
-        bone_lengths[i] = filter_outliers_with_iqr(bone_lengths[i])
-
-        bone_lengths_mean[i] = torch.mean(bone_lengths[i])
-        bone_lengths_std[i] = torch.std(bone_lengths[i])
-
-    print('nan count: ', end='')
-    print(bone_lengths_n_nan)
-    print('bone lengths mean: ', end='')
-    print(bone_lengths_mean)
-    print('bone lengths std:  ', end='')
-    print(bone_lengths_std)
-
-    pair_joints = [
-        (1, 2), (4, 5), (7, 8), (10, 11), (13, 14), (16, 17), (18, 19), (20, 21)
-    ]
-    for pair in pair_joints:
-        length_mean = (bone_lengths_mean[pair[0]] + bone_lengths_mean[pair[1]]) / 2
-        bone_lengths_mean[pair[0]] = bone_lengths_mean[pair[1]] = length_mean
-
-    base_lengths_sum = 0
-    svd_lengths_sum = 0
-    target_joints = [4, 5, 7, 8, 20, 21]
-
+    print("base bind jlp")
     base_bind_jlp = torch.zeros(n_joints, 3)
     base_bind_jlp[1:] = base_bind_jgp[1:] - base_bind_jgp[topology[1:]]
     base_bone_lengths = torch.linalg.norm(base_bind_jlp, dim=-1)
     bind_jlp = base_bind_jlp.clone()
+    return base_bind_jlp
 
-    for i in target_joints:
-        if bone_lengths_n_nan[i] < n_frames * 0.1:
-            base_lengths_sum += base_bone_lengths[i]
-            svd_lengths_sum += bone_lengths_mean[i]
-        else:
-            print(f"too many nan: {i}, {bone_lengths_n_nan[i]}")
+    try:
 
-    scale = svd_lengths_sum / base_lengths_sum
+        # Only use translation
+        jgp = svd_solver(points, weights, offsets)[..., 3]
 
-    for i in range(1, n_joints):
-        if i in target_joints:
-            bone_lengths_mean[i] = torch.clamp(
-                bone_lengths_mean[i],
-                base_bone_lengths[i] * scale * 0.7,
-                base_bone_lengths[i] * scale * 1.3
-            )
-        else:
-            bone_lengths_mean[i] = base_bone_lengths[i] * scale
+        bone_lengths = [torch.zeros(n_frames) for _ in range(n_joints)]
+        for i, pi in enumerate(topology):
+            if i == 0:
+                assert pi == -1
+                continue
 
-        bind_jlp[i] *= bone_lengths_mean[i]
+            bone_lengths[i] = torch.linalg.norm(jgp[:, i] - jgp[:, pi], dim=-1)
 
-    bind_jlp = base_bind_jlp
+        bone_lengths_mean = torch.zeros(n_joints)
+        bone_lengths_std = torch.zeros(n_joints)
+        bone_lengths_n_nan = torch.zeros(n_joints)
 
-    if gp is False:
-        return bind_jlp
+        for i in range(n_joints):
+            bone_lengths[i] = bone_lengths[i][~bone_lengths[i].isnan()]
+            bone_lengths_n_nan[i] = n_frames - bone_lengths[i].shape[0]
+            bone_lengths[i] = filter_outliers_with_iqr(bone_lengths[i])
+
+            bone_lengths_mean[i] = torch.mean(bone_lengths[i])
+            bone_lengths_std[i] = torch.std(bone_lengths[i])
+
+        print('nan count: ', end='')
+        print(bone_lengths_n_nan)
+        print('bone lengths mean: ', end='')
+        print(bone_lengths_mean)
+        print('bone lengths std:  ', end='')
+        print(bone_lengths_std)
+
+        pair_joints = [
+            (1, 2), (4, 5), (7, 8), (10, 11), (13, 14), (16, 17), (18, 19), (20, 21)
+        ]
+        for pair in pair_joints:
+            length_mean = (bone_lengths_mean[pair[0]] + bone_lengths_mean[pair[1]]) / 2
+            bone_lengths_mean[pair[0]] = bone_lengths_mean[pair[1]] = length_mean
+
+        base_lengths_sum = 0
+        svd_lengths_sum = 0
+        target_joints = [4, 5, 7, 8, 20, 21]
+
+        base_bind_jlp = torch.zeros(n_joints, 3)
+        base_bind_jlp[1:] = base_bind_jgp[1:] - base_bind_jgp[topology[1:]]
+        base_bone_lengths = torch.linalg.norm(base_bind_jlp, dim=-1)
+        bind_jlp = base_bind_jlp.clone()
+
+        for i in target_joints:
+            if bone_lengths_n_nan[i] < n_frames * 0.1:
+                base_lengths_sum += base_bone_lengths[i]
+                svd_lengths_sum += bone_lengths_mean[i]
+            else:
+                print(f"too many nan: {i}, {bone_lengths_n_nan[i]}")
+
+        scale = svd_lengths_sum / base_lengths_sum
+
+        for i in range(1, n_joints):
+            if i in target_joints:
+                bone_lengths_mean[i] = torch.clamp(
+                    bone_lengths_mean[i],
+                    base_bone_lengths[i] * scale * 0.7,
+                    base_bone_lengths[i] * scale * 1.3
+                )
+            else:
+                bone_lengths_mean[i] = base_bone_lengths[i] * scale
+
+            bind_jlp[i] *= bone_lengths_mean[i]
+
+        bind_jlp = base_bind_jlp
+
+        if gp is False:
+            return bind_jlp
+    except:
+        print("base bind jlp")
+        base_bind_jlp = torch.zeros(n_joints, 3)
+        base_bind_jlp[1:] = base_bind_jgp[1:] - base_bind_jgp[topology[1:]]
+        base_bone_lengths = torch.linalg.norm(base_bind_jlp, dim=-1)
+        bind_jlp = base_bind_jlp.clone()
+        return base_bind_jlp
 
 
 def filter_outliers_with_iqr(data, outlier_factor=1.5):
@@ -111,7 +129,7 @@ def filter_outliers_with_iqr(data, outlier_factor=1.5):
 
 def find_pose(
         topology, bind_jlp, points, weights, offsets, init_params=None,
-        eps=1e-5, max_iter=10, mse_threshold=1e-5, u=1e-3, v=1.5
+        eps=1e-5, max_iter=70, mse_threshold=1e-5, u=1e-3, v=1.5
 ):
     device = points.device
 
@@ -145,11 +163,22 @@ def find_pose(
     n_markers = points.shape[0]
     n_joints = topology.shape[0]
 
+    bind_jgp = bind_jlp.clone()
+    for i, pi in enumerate(topology):
+        if i == 0:
+            assert pi == -1
+            continue
+
+        bind_jgp[i] = bind_jgp[pi] + bind_jgp[i]
+    root_height = bind_jgp[0, 1] - min(bind_jgp[:, 1])
+
     if init_params is not None:
         assert len(init_params) == n_params
         params = init_params.to(device)
     else:
         params = torch.zeros(n_params).to(device)
+        params[2] = root_height
+        params[3:6] = torch.Tensor([torch.pi / 2, 0, 0]).to(device)
 
     out_n = n_markers * 3
     jacobian = torch.zeros([out_n, n_params]).to(device)
@@ -159,6 +188,9 @@ def find_pose(
 
     jlt = torch.eye(4).repeat(n_joints, 1, 1).to(device)
     jlt[:, :3, 3] = bind_jlp
+
+    # jgt, virtual_points = lbs(topology, jlt, params, weights, offsets)
+    # return params, jgt, virtual_points
 
     for i in range(max_iter):
         residual, mse = get_residual(topology, jlt, params, points, weights, offsets, mse=True)
@@ -222,36 +254,60 @@ def get_derivative(topology, jlt, params, points, weights, offsets, k, eps):
     return d.ravel()
 
 
+def fk_backup(topology, jlt, params):
+    jt = jlt.clone()
+    jt[0, :3, 3] = params[:3]
+    # x = params[3:].view(-1, 3)[:, 0]
+    # y = params[3:].view(-1, 3)[:, 1]
+    # z = params[3:].view(-1, 3)[:, 2]
+    #
+    # cos_x, sin_x = torch.cos(x), torch.sin(x)
+    # cos_y, sin_y = torch.cos(y), torch.sin(y)
+    # cos_z, sin_z = torch.cos(z), torch.sin(z)
+    #
+    # x_mat = torch.stack([
+    #     torch.ones_like(x), torch.zeros_like(x), torch.zeros_like(x),
+    #     torch.zeros_like(x), cos_x, -sin_x,
+    #     torch.zeros_like(x), sin_x, cos_x
+    # ], dim=1).view(-1, 3, 3)
+    #
+    # y_mat = torch.stack([
+    #     cos_y, torch.zeros_like(y), sin_y,
+    #     torch.zeros_like(y), torch.ones_like(y), torch.zeros_like(y),
+    #     -sin_y, torch.zeros_like(y), cos_y
+    # ], dim=1).view(-1, 3, 3)
+    #
+    # z_mat = torch.stack([
+    #     cos_z, -sin_z, torch.zeros_like(z),
+    #     sin_z, cos_z, torch.zeros_like(z),
+    #     torch.zeros_like(z), torch.zeros_like(z), torch.ones_like(z)
+    # ], dim=1).view(-1, 3, 3)
+    #
+    # rot_mat = torch.matmul(torch.matmul(z_mat, y_mat), x_mat)
+
+    # rot_mat = R.from_euler('xyz',  params.view(-1, 3).cpu().numpy(), degrees=True)
+    # rot_mat = torch.from_numpy(rot_mat)
+
+    rot_mat = batch_rodrigues(params[3:].view(-1, 3))
+
+    jt[:, :3, :3] = rot_mat
+
+    for i, pi in enumerate(topology):
+        if i == 0:
+            assert pi == -1
+            continue
+
+        jt[i] = jt[pi] @ jt[i]
+
+    return jt
+
+
 def fk(topology, jlt, params):
     jt = jlt.clone()
     jt[0, :3, 3] = params[:3]
-    x = params[3:].view(-1, 3)[:, 0]
-    y = params[3:].view(-1, 3)[:, 1]
-    z = params[3:].view(-1, 3)[:, 2]
 
-    cos_x, sin_x = torch.cos(x), torch.sin(x)
-    cos_y, sin_y = torch.cos(y), torch.sin(y)
-    cos_z, sin_z = torch.cos(z), torch.sin(z)
+    rot_mat = batch_rodrigues(params[3:].view(-1, 3))
 
-    x_mat = torch.stack([
-        torch.ones_like(x), torch.zeros_like(x), torch.zeros_like(x),
-        torch.zeros_like(x), cos_x, -sin_x,
-        torch.zeros_like(x), sin_x, cos_x
-    ], dim=1).view(-1, 3, 3)
-
-    y_mat = torch.stack([
-        cos_y, torch.zeros_like(y), sin_y,
-        torch.zeros_like(y), torch.ones_like(y), torch.zeros_like(y),
-        -sin_y, torch.zeros_like(y), cos_y
-    ], dim=1).view(-1, 3, 3)
-
-    z_mat = torch.stack([
-        cos_z, -sin_z, torch.zeros_like(z),
-        sin_z, cos_z, torch.zeros_like(z),
-        torch.zeros_like(z), torch.zeros_like(z), torch.ones_like(z)
-    ], dim=1).view(-1, 3, 3)
-
-    rot_mat = torch.matmul(torch.matmul(z_mat, y_mat), x_mat)
     jt[:, :3, :3] = rot_mat
 
     for i, pi in enumerate(topology):
