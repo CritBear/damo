@@ -57,7 +57,7 @@ def evaluate():
                 continue
 
             eval_data_dir = Paths.test_results / 'model_outputs' / f'{model_name}_epc{epoch}_synthetic'
-            eval_data_path = eval_data_dir / f'{model_name}_epc{epoch}_synthetic_{noise}.pkl'
+            eval_data_path = eval_data_dir / f'{model_name}_epc{epoch}_synthetic_{dataset}_{noise}.pkl'
 
             with open(eval_data_path, 'rb') as f:
                 eval_data = pickle.load(f)

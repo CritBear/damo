@@ -24,9 +24,9 @@ def main():
 
     data_names = [
         "HDM05",
-        # "SFU",
-        # "MoSh",
-        # "SOMA"
+        "SFU",
+        "MoSh",
+        "SOMA"
     ]
 
     noises = [
@@ -99,11 +99,13 @@ def inference_synthetic(data_name, noise, eval_data):
                 weights_list.append(weights)
                 offsets_list.append(offsets)
 
+            print('')
+
             eval_data[noise]['indices'].append(torch.cat(indices_list, dim=0).cpu().numpy())
             eval_data[noise]['weights'].append(torch.cat(weights_list, dim=0).cpu().numpy())
             eval_data[noise]['offsets'].append(torch.cat(offsets_list, dim=0).cpu().numpy())
 
-    output_path = output_dir / f'{model_name}_epc{epoch}_synthetic_{noise}.pkl'
+    output_path = output_dir / f'{model_name}_epc{epoch}_synthetic_{data_name}_{noise}.pkl'
     with open(output_path, 'wb') as f:
         pickle.dump(eval_data[noise], f)
 
