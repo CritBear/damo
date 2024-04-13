@@ -33,40 +33,39 @@ def to_gpu(ndarray):
 def evaluate():
     eval_dataset = {
         'HDM05': True,
-        'SFU': True,
-        'Mosh': True,
-        'SOMA': True
+        'SFU': False,
+        'Mosh': False,
+        'SOMA': False
     }
 
     eval_noise = {
         'j': False,
         'jg': False,
         'jgo': False,
-        'jgos': False,
-        'real': True
+        'jgos': True
     }
 
-    model_name = 'damo_240412022202_epc290'
-    eval_data_date = '20240413'
+    model_name = 'damo_240408222808'
+    epoch = '200'
 
     for dataset, do_dataset in eval_dataset.items():
         if not do_dataset:
             continue
 
-        eval_data_path = Paths.test_results / 'model_outputs' / model_name
-        eval_data_path = eval_data_path / f'model_output_damo_eval_{dataset}_{eval_data_date}.pkl'
-
-        with open(eval_data_path, 'rb') as f:
-            eval_data = pickle.load(f)
-
         for noise, do_noise in eval_noise.items():
             if not do_noise:
                 continue
 
-            evaluate_entry(eval_data, dataset, noise, model_name)
+            eval_data_dir = Paths.test_results / 'model_outputs' / f'{model_name}_epc{epoch}_synthetic'
+            eval_data_path = eval_data_dir / f'{model_name}_epc{epoch}_synthetic_{noise}.pkl'
+
+            with open(eval_data_path, 'rb') as f:
+                eval_data = pickle.load(f)
+
+            evaluate_entry(eval_data, dataset, noise, model_name, epoch)
 
 
-def evaluate_entry(eval_data, dataset, noise, model_name):
+def evaluate_entry(eval_data, dataset, noise, model_name, epoch):
     visualize = False
     generate_figure_data = False
     position_smoothing = True
@@ -74,7 +73,12 @@ def evaluate_entry(eval_data, dataset, noise, model_name):
     pre_motion_idx = -1
     pre_n_frames = -1
 
-    topology = eval_data['topology']
+    common_data_path = Paths.datasets / 'common' / f'damo_common_20240329.pkl'
+
+    with open(common_data_path, 'rb') as f:
+        common_data = pickle.load(f)
+
+    topology = common_data['topology']
     n_joints = topology.shape[0]
     n_max_markers = 90
 
@@ -87,42 +91,34 @@ def evaluate_entry(eval_data, dataset, noise, model_name):
 
     data_type = 'real' if noise == 'real' else 'synthetic'
 
-    points_list = eval_data[f'{noise}']
-    indices_list = eval_data[f'{noise}_indices_pred']
-    weights_list = eval_data[f'{noise}_weights_pred']
-    offsets_list = eval_data[f'{noise}_offsets_pred']
-    gt_jgp_list = eval_data[f'{data_type}_jgp']
-    gt_bind_jgp_list = eval_data[f'{data_type}_bind_jgp']
-    gt_bind_jlp_list = eval_data[f'{data_type}_bind_jlp']
-
     smplh_neutral_path = Paths.support_data / 'body_models' / 'smplh' / 'neutral' / 'model.npz'
     smplh_neutral = np.load(smplh_neutral_path)
     smplh_neutral = dict2class(smplh_neutral)
     base_bind_jgp = to_gpu(smplh_neutral.J)
 
-    n_motions = len(indices_list)
+    n_motions = len(eval_data['points_seq'])
     for motion_idx in range(n_motions):
         if pre_motion_idx != -1:
             motion_idx = pre_motion_idx
 
         print(f"Solving... motion clip:[{motion_idx + 1}/{n_motions}]")
 
-        points = to_gpu(points_list[motion_idx])
-        indices = to_gpu(indices_list[motion_idx])
-        weights = to_gpu(weights_list[motion_idx])
-        offsets = to_gpu(offsets_list[motion_idx])
+        seq_len = eval_data['points_seq'][motion_idx].shape[1]
+
+        points = to_gpu(eval_data['points_seq'][motion_idx][:, seq_len//2, :, :])
+        indices = to_gpu(eval_data['indices'][motion_idx])
+        weights = to_gpu(eval_data['weights'][motion_idx])
+        offsets = to_gpu(eval_data['offsets'][motion_idx])
 
         n_frames = indices.shape[0]
 
-        point_pad = torch.zeros(n_frames, n_max_markers, 3).to(device)
-        point_pad[:, :points.shape[1]] = points[:n_frames]
-        points = point_pad
+        points = points[:n_frames]
 
-        gt_jgp = to_gpu(gt_jgp_list[motion_idx][:n_frames])
+        gt_jgp = to_gpu(eval_data['jgp'][motion_idx][:n_frames])
         poses = to_gpu(eval_data['poses'][motion_idx])
         gt_jlr = batch_rodrigues(poses.view(-1, n_joints, 3)[:n_frames].view(-1, 3)).view(n_frames, n_joints, 3, 3)
-        gt_bind_jgp = to_gpu(gt_bind_jgp_list[motion_idx])
-        gt_bind_jlp = to_gpu(gt_bind_jlp_list[motion_idx])
+        gt_bind_jgp = to_gpu(eval_data['bind_jgp'][motion_idx])
+        gt_bind_jlp = to_gpu(eval_data['bind_jlp'][motion_idx])
 
         j3_indices = torch.argsort(indices, dim=-1, descending=True)[..., :3]  # [f, m, 3]
         j_weights = torch.zeros(n_frames, n_max_markers, n_joints + 1).to(device)  # [f, m, j+1]
@@ -142,18 +138,18 @@ def evaluate_entry(eval_data, dataset, noise, model_name):
         ] = offsets
         j_offsets = j_offsets[:, :, :n_joints]  # [f, m, j, 3]
 
-        for f in range(n_frames):
-            for j in range(n_max_markers):
-                if j3_indices[f][j][0] == n_joints:
-                    j3_indices[f][j][0] = 0
-                    j_weights[f][j] = 0
-                    j_offsets[f][j] = 0
-
-                if j3_indices[f][j][1] == n_joints:
-                    j3_indices[f][j][1] = 0
-
-                if j3_indices[f][j][2] == n_joints:
-                    j3_indices[f][j][2] = 0
+        # for f in range(n_frames):
+        #     for j in range(n_max_markers):
+        #         if j3_indices[f][j][0] == n_joints:
+        #             j3_indices[f][j][0] = 0
+        #             j_weights[f][j] = 0
+        #             j_offsets[f][j] = 0
+        #
+        #         if j3_indices[f][j][1] == n_joints:
+        #             j3_indices[f][j][1] = 0
+        #
+        #         if j3_indices[f][j][2] == n_joints:
+        #             j3_indices[f][j][2] = 0
 
         # Debug__________________________________
         start_frame = 0
@@ -161,7 +157,8 @@ def evaluate_entry(eval_data, dataset, noise, model_name):
             n_frames = min(n_frames, pre_n_frames)
         # _______________________________________
 
-        bind_jlp = find_bind_pose(topology, base_bind_jgp, points, j_weights, j_offsets)
+        # bind_jlp = find_bind_pose(topology, base_bind_jgp, points, j_weights, j_offsets)
+        bind_jlp = gt_bind_jlp.to(cpu)
 
         gt_bind_jlp = gt_bind_jlp.to(cpu)
         gt_bind_jlp.share_memory_()

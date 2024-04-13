@@ -20,22 +20,22 @@ def inference():
     }
 
     eval_noise = {
-        'j': True,
-        'jg': True,
-        'jgo': True,
-        'jgos': True,
+        'j': False,
+        'jg': False,
+        'jgo': False,
+        'jgos': False,
         'real': True
     }
 
-    model_name = 'damo_240404153143'
-    epoch = '120'
-    eval_data_date = '20240408'
+    model_name = 'damo_240412022202'
+    epoch = '290'
+    eval_data_date = '20240413'
     model_dir = Paths.trained_models / model_name
 
     model_path = model_dir / f'{model_name}_epc{epoch}.pt'
     options_path = model_dir / 'options.json'
-    # options = load_options_from_json_for_inference(options_path)
-    options = TrainingOptions()
+    options = load_options_from_json_for_inference(options_path)
+    # options = TrainingOptions()
 
     model = Damo(options).to(device)
     model.load_state_dict(torch.load(model_path))
@@ -64,18 +64,11 @@ def inference():
 
 
 def inference_entry(model, eval_data, dataset, noise):
-    is_real = True if noise == 'real' else False
 
-    if is_real:
-        eval_data['real_indices_pred'] = []
-        eval_data['real_weights_pred'] = []
-        eval_data['real_offsets_pred'] = []
-        points_seq = eval_data['real']
-    else:
-        eval_data[f'synthetic_{noise}_indices_pred'] = []
-        eval_data[f'synthetic_{noise}_weights_pred'] = []
-        eval_data[f'synthetic_{noise}_offsets_pred'] = []
-        points_seq = eval_data[f'synthetic_{noise}']
+    eval_data[f'{noise}_indices_pred'] = []
+    eval_data[f'{noise}_weights_pred'] = []
+    eval_data[f'{noise}_offsets_pred'] = []
+    points_seq = eval_data[f'{noise}']
 
     print('')
     print(f'eval_data_{dataset}_{noise}')
@@ -127,14 +120,9 @@ def inference_entry(model, eval_data, dataset, noise):
             assert indices.shape[0] == (n_frames // batch_size) * batch_size, \
                 f'{indices.shape[0]} | {(n_frames // batch_size) * batch_size}'
 
-            if is_real:
-                eval_data['real_indices_pred'].append(indices)
-                eval_data['real_weights_pred'].append(weights)
-                eval_data['real_offsets_pred'].append(offsets)
-            else:
-                eval_data[f'synthetic_{noise}_indices_pred'].append(indices)
-                eval_data[f'synthetic_{noise}_weights_pred'].append(weights)
-                eval_data[f'synthetic_{noise}_offsets_pred'].append(offsets)
+            eval_data[f'{noise}_indices_pred'].append(indices)
+            eval_data[f'{noise}_weights_pred'].append(weights)
+            eval_data[f'{noise}_offsets_pred'].append(offsets)
 
 
 if __name__ == '__main__':

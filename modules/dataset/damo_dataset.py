@@ -26,10 +26,12 @@ class DamoDataset(Dataset):
             dist_from_skin=0.01,
             dist_augmentation=False,
             z_rot_augmentation=False,
-            test=False
+            test=False,
+            debug=False,
     ):
         super().__init__()
 
+        self.dataset_paths = dataset_paths
         self.n_max_markers = n_max_markers
         self.seq_len = seq_len
         self.r_ss_ds_ratio =r_ss_ds_ratio
@@ -41,6 +43,7 @@ class DamoDataset(Dataset):
         self.dist_augmentation = dist_augmentation
         self.z_rot_augmentation = z_rot_augmentation
         self.test = test
+        self.debug = debug
 
         assert self.seq_len % 2 == 1, ValueError(
             f"seq_len ({self.seq_len}) must be odd number.")
@@ -60,65 +63,151 @@ class DamoDataset(Dataset):
         self.v_j3_indices = common_data['v_j3_indices']
         self.v_j3_weights = common_data['v_j3_weights']
 
-        self.n_frames = []
-        self.m_v_idx = []
-        self.m_j3_indices = []
-        self.m_j3_weights = []
-        self.m_j3_offsets = []
-        self.bind_v_shaped = []
-        self.bind_vn = []
-        self.bind_jlp = []
-        self.bind_jgp = []
-        self.ghost_marker_mask = []
-        self.markers = []
-        self.poses = []
-        self.jgp = []
+        # self.n_frames = []
+        # self.m_v_idx = []
+        # self.m_j3_indices = []
+        # self.m_j3_weights = []
+        # self.m_j3_offsets = []
+        # self.bind_v_shaped = []
+        # self.bind_vn = []
+        # self.bind_jlp = []
+        # self.bind_jgp = []
+        # self.ghost_marker_mask = []
+        # self.markers = []
+        # self.poses = []
+        # self.jgp = []
 
-        for dataset_path in dataset_paths:
-            with open(dataset_path, 'rb') as f:
-                data = pickle.load(f)
+        # for dataset_path in dataset_paths:
+        #     with open(dataset_path, 'rb') as f:
+        #         data = pickle.load(f)
+        #
+        #     self.n_frames.extend(data['n_frames'])
+        #     self.m_v_idx.extend(data['m_v_idx'])
+        #     self.m_j3_indices.extend(data['m_j3_indices'])
+        #     self.m_j3_weights.extend(data['m_j3_weights'])
+        #     self.m_j3_offsets.extend(data['m_j3_offsets'])
+        #     self.bind_v_shaped.extend(data['bind_v_shaped'])
+        #     self.bind_vn.extend(data['bind_vn'])
+        #     self.bind_jlp.extend(data['bind_jlp'])
+        #     self.bind_jgp.extend(data['bind_jgp'])
+        #     self.ghost_marker_mask.extend(data['ghost_marker_mask'])
+        #     self.markers.extend(data['markers'])
+        #     self.poses.extend(data['poses'])
+        #     self.jgp.extend(data['jgp'])
 
-            self.n_frames.extend(data['n_frames'])
-            self.m_v_idx.extend(data['m_v_idx'])
-            self.m_j3_indices.extend(data['m_j3_indices'])
-            self.m_j3_weights.extend(data['m_j3_weights'])
-            self.m_j3_offsets.extend(data['m_j3_offsets'])
-            self.bind_v_shaped.extend(data['bind_v_shaped'])
-            self.bind_vn.extend(data['bind_vn'])
-            self.bind_jlp.extend(data['bind_jlp'])
-            self.bind_jgp.extend(data['bind_jgp'])
-            self.ghost_marker_mask.extend(data['ghost_marker_mask'])
-            self.markers.extend(data['markers'])
-            self.poses.extend(data['poses'])
-            self.jgp.extend(data['jgp'])
+        # self.stacked_num_frames = np.cumsum(self.n_frames)
+        # self.total_num_frames = sum(self.n_frames)
+        self.length = len(dataset_paths)
 
-        self.stacked_num_frames = np.cumsum(self.n_frames)
-        self.total_num_frames = sum(self.n_frames)
-        self.length = len(self.n_frames)
-
-        print(f'INFO | Dataset | Total Motion num: {self.length}')
-        print(f'INFO | Dataset | Total frame length: {self.total_num_frames}')
+        # print(f'INFO | Dataset | Total Motion num: {self.length}')
+        # print(f'INFO | Dataset | Total frame length: {self.total_num_frames}')
 
     def __len__(self):
-        if self.test:
-            return self.total_num_frames // 10
+        # return self.total_num_frames
+        return self.length * 100
+        # if self.test:
+        #     return self.total_num_frames // 10
+        # else:
+        #     return self.length * 100
+
+    def getitem_debug(self, item_idx):
+        motion_idx = item_idx % self.length
+
+        with open(self.dataset_paths[motion_idx], 'rb') as f:
+            data = pickle.load(f)
+
+        n_frame = data['n_frames'][0]
+
+        frame_idx = random.randint(0, n_frame - 1)
+
+        half_seq = self.seq_len // 2
+        start_count = 0
+        start_idx = -1
+        end_count = 0
+        end_idx = -1
+
+        if frame_idx < half_seq:
+            start_count = half_seq - frame_idx
+            start_idx = 0
         else:
-            return self.length * 100
+            start_idx = frame_idx - half_seq
+        if frame_idx >= n_frame - half_seq:
+            end_count = half_seq - n_frame + frame_idx + 1
+            end_idx = n_frame
+        else:
+            end_idx = frame_idx + half_seq + 1
+
+        real = self.getitem_real(
+            data,
+            motion_idx,
+            frame_idx,
+            start_idx,
+            end_idx,
+            start_count,
+            end_count
+        )
+
+        synthetic_superset = self.getitem_synthetic(
+            data,
+            motion_idx,
+            frame_idx,
+            start_idx,
+            end_idx,
+            start_count,
+            end_count,
+            use_superset=True
+        )
+
+        synthetic_arbitrary = self.getitem_synthetic(
+            data,
+            motion_idx,
+            frame_idx,
+            start_idx,
+            end_idx,
+            start_count,
+            end_count,
+            use_superset=False
+        )
+
+        items = {
+            'real': real,
+            'synthetic_superset': synthetic_superset,
+            'synthetic_arbitrary': synthetic_arbitrary
+        }
+
+        return items
+
 
     def __getitem__(self, item_idx):
-        if self.test:
-            actual_idx = item_idx * 10
-            motion_idx = np.searchsorted(self.stacked_num_frames - actual_idx, 0, side='right')
-            n_frame = self.n_frames[motion_idx]
+        if self.debug:
+            return self.getitem_debug(item_idx)
 
-            if motion_idx == 0:
-                frame_idx = actual_idx
-            else:
-                frame_idx = actual_idx - self.stacked_num_frames[motion_idx - 1]
-        else:
-            motion_idx = item_idx % self.length
-            n_frame = self.n_frames[motion_idx]
-            frame_idx = random.randint(0, n_frame - 1)
+        # if self.test:
+        #     actual_idx = item_idx * 10
+        #     motion_idx = np.searchsorted(self.stacked_num_frames - actual_idx, 0, side='right')
+        #     n_frame = self.n_frames[motion_idx]
+        #
+        #     if motion_idx == 0:
+        #         frame_idx = actual_idx
+        #     else:
+        #         frame_idx = actual_idx - self.stacked_num_frames[motion_idx - 1]
+        # else:
+        motion_idx = item_idx % self.length
+
+        with open(self.dataset_paths[motion_idx], 'rb') as f:
+            data = pickle.load(f)
+
+        n_frame = data['n_frames'][0]
+
+        frame_idx = random.randint(0, n_frame - 1)
+
+        # motion_idx = np.searchsorted(self.stacked_num_frames - item_idx, 0, side='right')
+        # n_frame = self.n_frames[motion_idx]
+        #
+        # if motion_idx == 0:
+        #     frame_idx = item_idx
+        # else:
+        #     frame_idx = item_idx - self.stacked_num_frames[motion_idx - 1]
 
         half_seq = self.seq_len // 2
         start_count = 0
@@ -143,6 +232,7 @@ class DamoDataset(Dataset):
 
         if r < self.r_ss_ds_ratio[0]:
             return self.getitem_real(
+                data,
                 motion_idx,
                 frame_idx,
                 start_idx,
@@ -153,19 +243,26 @@ class DamoDataset(Dataset):
         else:
             ratio_sum = sum(self.r_ss_ds_ratio[1:])
             ss_ds_ratio = [v / ratio_sum for v in self.r_ss_ds_ratio[1:]]
+
+            if torch.rand(1) < ss_ds_ratio[0]:
+                use_superset = True
+            else:
+                use_superset = False
+
             return self.getitem_synthetic(
+                data,
                 motion_idx,
                 frame_idx,
                 start_idx,
                 end_idx,
                 start_count,
                 end_count,
-                ss_ds_ratio=ss_ds_ratio
+                use_superset=use_superset
             )
 
-    def getitem_real(self, mi, fi, si, ei, sc, ec):
+    def getitem_real(self, data, mi, fi, si, ei, sc, ec):
         n_joints = self.n_joints
-        n_markers = self.markers[mi].shape[1]
+        n_markers = data['markers'][0].shape[1]
 
         points_seq = []
         points_mask = []
@@ -178,7 +275,7 @@ class DamoDataset(Dataset):
             points_mask.append(torch.zeros(1, self.n_max_markers, requires_grad=False))
 
         for i in range(si, ei):
-            points = torch.from_numpy(self.markers[mi][i]).to(torch.float32)
+            points = torch.from_numpy(data['markers'][0][i]).to(torch.float32)
             mag = torch.norm(points, dim=-1)
             n_vm = torch.nonzero(mag > 0.001).shape[0]
             n_vm = min(n_vm, self.n_max_markers)
@@ -192,9 +289,9 @@ class DamoDataset(Dataset):
             points_mask.append(mask)
 
             if i == fi:
-                ghost_marker_mask = torch.Tensor(self.ghost_marker_mask[mi][i, :n_vm]).to(torch.float32)
+                ghost_marker_mask = torch.Tensor(data['ghost_marker_mask'][0][i, :n_vm]).to(torch.float32)
 
-                m_j_weights = torch.Tensor(self.weights[self.m_v_idx[mi][i, :n_vm], :]).to(torch.float32)
+                m_j_weights = torch.Tensor(self.weights[data['m_v_idx'][0][i, :n_vm], :]).to(torch.float32)
                 m_j_weights = m_j_weights * ghost_marker_mask[:, None]
 
                 ghost_weights = torch.ones((self.n_max_markers, 1))
@@ -208,7 +305,7 @@ class DamoDataset(Dataset):
                 )
                 padded_m_j_weights = torch.cat((padded_m_j_weights, ghost_weights), dim=-1)
 
-                m_j3_weights = torch.Tensor(self.m_j3_weights[mi][i, :n_vm]).to(torch.float32)
+                m_j3_weights = torch.Tensor(data['m_j3_weights'][0][i, :n_vm]).to(torch.float32)
                 m_j3_weights = m_j3_weights * ghost_marker_mask[:, None]
 
                 padded_m_j3_weights = F.pad(
@@ -219,7 +316,7 @@ class DamoDataset(Dataset):
                 )
                 padded_m_j3_weights[:n_vm, 0] += (1 - ghost_marker_mask)
 
-                m_j3_offsets = torch.Tensor(self.m_j3_offsets[mi][i, :n_vm]).to(torch.float32)
+                m_j3_offsets = torch.Tensor(data['m_j3_offsets'][0][i, :n_vm]).to(torch.float32)
                 m_j3_offsets = m_j3_offsets * ghost_marker_mask[:, None, None]
 
                 padded_m_j3_offsets = F.pad(
@@ -243,12 +340,12 @@ class DamoDataset(Dataset):
                 'm_j_weights': padded_m_j_weights,
                 'm_j3_weights': padded_m_j3_weights,
                 'm_j3_offsets': padded_m_j3_offsets,
-                'motion_idx': mi,
                 'frame_idx': fi,
                 'real': True,
-                'poses': torch.from_numpy(self.poses[mi][fi]).to(torch.float32),
-                'trans': torch.from_numpy(self.jgp[mi][fi][0]).to(torch.float32),
-                'bind_jgp': torch.from_numpy(self.bind_jgp[mi]).to(torch.float32)
+                'poses': torch.from_numpy(data['poses'][0][fi]).to(torch.float32),
+                'jgp': torch.from_numpy(data['jgp'][0][fi]).to(torch.float32),
+                'bind_jgp': torch.from_numpy(data['bind_jgp'][0]).to(torch.float32),
+                'bind_jlp': torch.from_numpy(data['bind_jlp'][0]).to(torch.float32)
             }
         else:
             items = {
@@ -257,20 +354,14 @@ class DamoDataset(Dataset):
                 'm_j_weights': padded_m_j_weights,
                 'm_j3_weights': padded_m_j3_weights,
                 'm_j3_offsets': padded_m_j3_offsets,
-                'motion_idx': mi,
                 'frame_idx': fi,
                 'real': True
             }
 
         return items
 
-    def getitem_synthetic(self, mi, fi, si, ei, sc, ec, ss_ds_ratio):
+    def getitem_synthetic(self, data, mi, fi, si, ei, sc, ec, use_superset):
         n_joints = self.n_joints
-
-        if torch.rand(1) < ss_ds_ratio[0]:
-            use_superset = True
-        else:
-            use_superset = False
 
         if use_superset:
             n_selected_superset = np.random.randint(22, len(self.superset_variant))
@@ -302,8 +393,8 @@ class DamoDataset(Dataset):
 
         bind_jlp = torch.from_numpy(self.caesar_bind_jlp[body_idx]).to(torch.float32)
         bind_jgp = torch.from_numpy(self.caesar_bind_jgp[body_idx]).to(torch.float32)
-        trans = torch.from_numpy(self.jgp[mi][si:ei, 0]).to(torch.float32)
-        poses = torch.from_numpy(self.poses[mi][si:ei]).to(torch.float32)
+        trans = torch.from_numpy(data['jgp'][0][si:ei, 0]).to(torch.float32)
+        poses = torch.from_numpy(data['poses'][0][si:ei]).to(torch.float32)
         jlr_seq = batch_rodrigues(poses.view(-1, 3)).view(ei-si, self.n_joints, 3, 3)
 
         jgt_seq = torch.eye(4).repeat(ei-si, self.n_joints, 1, 1)
@@ -472,12 +563,12 @@ class DamoDataset(Dataset):
                 'm_j_weights': padded_m_j_weights,
                 'm_j3_weights': padded_m_j3_weights,
                 'm_j3_offsets': padded_m_j3_offsets,
-                'motion_idx': mi,
                 'frame_idx': fi,
                 'real': False,
-                'poses': torch.from_numpy(self.poses[mi][fi]).to(torch.float32),
-                'trans': torch.from_numpy(self.jgp[mi][fi][0]).to(torch.float32),
-                'bind_jgp': torch.from_numpy(self.caesar_bind_jgp[body_idx]).to(torch.float32)
+                'poses': torch.from_numpy(data['poses'][0][fi]).to(torch.float32),
+                'jgp': torch.from_numpy(data['jgp'][0][fi]).to(torch.float32),
+                'bind_jgp': torch.from_numpy(data['bind_jgp'][0]).to(torch.float32),
+                'bind_jlp': torch.from_numpy(data['bind_jlp'][0]).to(torch.float32)
             }
         else:
             items = {
@@ -486,7 +577,6 @@ class DamoDataset(Dataset):
                 'm_j_weights': padded_m_j_weights,
                 'm_j3_weights': padded_m_j3_weights,
                 'm_j3_offsets': padded_m_j3_offsets,
-                'motion_idx': mi,
                 'frame_idx': fi,
                 'real': False
             }

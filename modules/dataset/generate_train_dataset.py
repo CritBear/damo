@@ -44,7 +44,7 @@ def to_gpu(ndarray):
 
 def generate_dataset():
     # raw_data_dirs = ['CMU', 'SFU']
-    raw_data_dirs = ['CMU']  # 'PosePrior', 'HDM05', 'SOMA', 'DanceDB',
+    raw_data_dirs = ['HDM05', 'SFU', 'MoSh', 'SOMA']  # 'PosePrior', 'HDM05', 'SOMA', 'DanceDB',
     save_batch_file = True
     print(f"save batch file: {save_batch_file}")
 
@@ -125,8 +125,8 @@ def generate_dataset():
     with open(common_dataset_path, 'wb') as f:
         pickle.dump(common_data.__dict__, f)
 
-    # for dataset_name in raw_data_dirs:
-    #     generate_dataset_entry(dataset_name, common_data, date, save_batch_file)
+    for dataset_name in raw_data_dirs:
+        generate_dataset_entry(dataset_name, common_data, date, save_batch_file)
 
 
 def generate_dataset_entry(dataset_name, common_data, date, save_batch_file=False):
@@ -134,7 +134,8 @@ def generate_dataset_entry(dataset_name, common_data, date, save_batch_file=Fals
         save_dir = Paths.datasets / 'batch' / date / dataset_name
         save_dir.mkdir(parents=True, exist_ok=True)
 
-    data_dir = Paths.datasets / 'raw' / dataset_name
+    # data_dir = Paths.datasets / 'raw' / dataset_name
+    data_dir = Paths.datasets / 'eval' / 'raw' / dataset_name
     c3d_files = list(data_dir.rglob('*.c3d'))
     npz_files = list(data_dir.rglob('*.npz'))
 
@@ -174,16 +175,32 @@ def generate_dataset_entry(dataset_name, common_data, date, save_batch_file=Fals
     j3_weights = to_gpu(j3_weights)  # [v, 3]
 
     # check files
+    # target_npz_files = []
+    # for file_idx, c3d_file in enumerate(c3d_files):
+    #     target_npz_file_path = [
+    #         c3d_file.parent / (c3d_file.stem + suffix)
+    #         for suffix in ['_poses.npz', '_stageii.npz', '_C3D_poses.npz']
+    #     ]
+    #
+    #     found = False
+    #     for i, npz_file in enumerate(npz_files):
+    #         if npz_file in target_npz_file_path:
+    #             target_npz_files.append(npz_file)
+    #             found = True
+    #             break
+    #
+    #     assert found is True, f'Index: {file_idx} | {c3d_file}'
+
     target_npz_files = []
     for file_idx, c3d_file in enumerate(c3d_files):
         target_npz_file_path = [
-            c3d_file.parent / (c3d_file.stem + suffix)
-            for suffix in ['_poses.npz', '_stageii.npz', '_C3D_poses.npz']
+            f'{c3d_file.parts[-2]}/{(c3d_file.stem + suffix)}'
+            for suffix in ['_poses', '_stageii', '_C3D_poses']
         ]
 
         found = False
         for i, npz_file in enumerate(npz_files):
-            if npz_file in target_npz_file_path:
+            if f'{npz_file.parts[-2]}/{(npz_file.stem)}' in target_npz_file_path:
                 target_npz_files.append(npz_file)
                 found = True
                 break

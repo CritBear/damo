@@ -11,6 +11,7 @@ class TrainingOptions:
         self.model_comment = ''
         self.train_dataset_names = ['ACCAD', 'PosePrior', 'CMU']
         self.test_dataset_names = ['SFU', 'SOMA']
+        self.train_data_ratio = [0.5, 0.25, 0.25]
         self.dataset_date = '20240329'
         self.load_batch_data = True
 

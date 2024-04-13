@@ -24,15 +24,14 @@ def find_bind_pose(topology, base_bind_jgp, points, weights, offsets, gp=False):
     n_joints = topology.shape[0]
     svd_solver = SVD_Solver(n_joints)
 
-    print("base bind jlp")
-    base_bind_jlp = torch.zeros(n_joints, 3)
-    base_bind_jlp[1:] = base_bind_jgp[1:] - base_bind_jgp[topology[1:]]
-    base_bone_lengths = torch.linalg.norm(base_bind_jlp, dim=-1)
-    bind_jlp = base_bind_jlp.clone()
-    return base_bind_jlp
+    # print("base bind jlp")
+    # base_bind_jlp = torch.zeros(n_joints, 3)
+    # base_bind_jlp[1:] = base_bind_jgp[1:] - base_bind_jgp[topology[1:]]
+    # base_bone_lengths = torch.linalg.norm(base_bind_jlp, dim=-1)
+    # bind_jlp = base_bind_jlp.clone()
+    # return base_bind_jlp
 
     try:
-
         # Only use translation
         jgp = svd_solver(points, weights, offsets)[..., 3]
 
@@ -128,40 +127,42 @@ def filter_outliers_with_iqr(data, outlier_factor=1.5):
 
 
 def find_pose(
-        topology, bind_jlp, points, weights, offsets, init_params=None,
+        topology, bind_jlp, points, weights, offsets, init_params=None, verbose=False, verbose_arg='',
         eps=1e-5, max_iter=70, mse_threshold=1e-5, u=1e-3, v=1.5
 ):
     device = points.device
 
-    params_infos = [
-        ParamInfo(0, x_rot_mat, -180, 180), ParamInfo(0, y_rot_mat, -180, 180), ParamInfo(0, z_rot_mat, -180, 180),
-        ParamInfo(1, x_rot_mat, -180, 180), ParamInfo(1, y_rot_mat, -180, 180), ParamInfo(1, z_rot_mat, -180, 180),
-        ParamInfo(2, x_rot_mat, -180, 180), ParamInfo(2, y_rot_mat, -180, 180), ParamInfo(2, z_rot_mat, -180, 180),
-        ParamInfo(3, x_rot_mat, -180, 180), ParamInfo(3, y_rot_mat, -180, 180), ParamInfo(3, z_rot_mat, -180, 180),
-        ParamInfo(4, x_rot_mat, -180, 180), ParamInfo(4, y_rot_mat, -180, 180), ParamInfo(4, z_rot_mat, -180, 180),
-        ParamInfo(5, x_rot_mat, -180, 180), ParamInfo(5, y_rot_mat, -180, 180), ParamInfo(5, z_rot_mat, -180, 180),
-        ParamInfo(6, x_rot_mat, -180, 180), ParamInfo(6, y_rot_mat, -180, 180), ParamInfo(6, z_rot_mat, -180, 180),
-        ParamInfo(7, x_rot_mat, -180, 180), ParamInfo(7, y_rot_mat, -180, 180), ParamInfo(7, z_rot_mat, -180, 180),
-        ParamInfo(8, x_rot_mat, -180, 180), ParamInfo(8, y_rot_mat, -180, 180), ParamInfo(8, z_rot_mat, -180, 180),
-        ParamInfo(9, x_rot_mat, -180, 180), ParamInfo(9, y_rot_mat, -180, 180), ParamInfo(9, z_rot_mat, -180, 180),
-        ParamInfo(10, x_rot_mat, -180, 180), ParamInfo(10, y_rot_mat, -180, 180), ParamInfo(10, z_rot_mat, -180, 180),
-        ParamInfo(11, x_rot_mat, -180, 180), ParamInfo(11, y_rot_mat, -180, 180), ParamInfo(11, z_rot_mat, -180, 180),
-        ParamInfo(12, x_rot_mat, -180, 180), ParamInfo(12, y_rot_mat, -180, 180), ParamInfo(12, z_rot_mat, -180, 180),
-        ParamInfo(13, x_rot_mat, -180, 180), ParamInfo(13, y_rot_mat, -180, 180), ParamInfo(13, z_rot_mat, -180, 180),
-        ParamInfo(14, x_rot_mat, -180, 180), ParamInfo(14, y_rot_mat, -180, 180), ParamInfo(14, z_rot_mat, -180, 180),
-        ParamInfo(15, x_rot_mat, -180, 180), ParamInfo(15, y_rot_mat, -180, 180), ParamInfo(15, z_rot_mat, -180, 180),
-        ParamInfo(16, x_rot_mat, -180, 180), ParamInfo(16, y_rot_mat, -180, 180), ParamInfo(16, z_rot_mat, -180, 180),
-        ParamInfo(17, x_rot_mat, -180, 180), ParamInfo(17, y_rot_mat, -180, 180), ParamInfo(17, z_rot_mat, -180, 180),
-        ParamInfo(18, x_rot_mat, -180, 180), ParamInfo(18, y_rot_mat, -180, 180), ParamInfo(18, z_rot_mat, -180, 180),
-        ParamInfo(19, x_rot_mat, -180, 180), ParamInfo(19, y_rot_mat, -180, 180), ParamInfo(19, z_rot_mat, -180, 180),
-        ParamInfo(20, x_rot_mat, -180, 180), ParamInfo(20, y_rot_mat, -180, 180), ParamInfo(20, z_rot_mat, -180, 180),
-        ParamInfo(21, x_rot_mat, -180, 180), ParamInfo(21, y_rot_mat, -180, 180), ParamInfo(21, z_rot_mat, -180, 180),
-        ParamInfo(22, x_rot_mat, -180, 180), ParamInfo(21, y_rot_mat, -180, 180), ParamInfo(21, z_rot_mat, -180, 180),
-        ParamInfo(23, x_rot_mat, -180, 180), ParamInfo(21, y_rot_mat, -180, 180), ParamInfo(21, z_rot_mat, -180, 180),
-    ]
-    n_params = len(params_infos) + 3
+    bounds = torch.Tensor([
+        [-999, 999], [-999, 999], [-999, 999],  # pos
+        [-360, 360], [-360, 360], [-360, 360],  # 0
+        [-100, 40], [-30, 40], [-25, 50],  # 1
+        [-100, 40], [-40, 30], [-50, 25],  # 2
+        [-25, 100], [-20, 20], [-20, 20],  # 3
+        [-25, 150], [-45, 45], [-20, 20],  # 4
+        [-25, 150], [-45, 45], [-20, 20],  # 5
+        [-40, 40], [-20, 15], [-20, 20],  # 6
+        [-60, 60], [-20, 40], [-25, 25],  # 7
+        [-60, 60], [-40, 20], [-25, 25],  # 8
+        [-20, 20], [-15, 15], [-15, 15],  # 9
+        [-40, 20], [-20, 20], [-50, 50],  # 10
+        [-40, 20], [-20, 20], [-50, 50],  # 11
+        [-50, 50], [-50, 50], [-40, 40],  # 12
+        [-50, 25], [-60, 35], [-50, 50],  # 13
+        [-50, 25], [-35, 60], [-50, 50],  # 14
+        [-60, 40], [-45, 45], [-35, 35],  # 15
+        [-50, 50], [-75, 40], [-100, 50],  # 16
+        [-50, 50], [-40, 75], [-50, 100],  # 17
+        [-180, 180], [-100, 40], [-180, 180],  # 18
+        [-180, 180], [-40, 100], [-180, 180],  # 19
+        [-100, 50], [-50, 35], [-70, 100],  # 20
+        [-100, 50], [-35, 50], [-100, 70],  # 21
+        [-180, 180], [-180, 180], [-180, 180],  # 22
+        [-180, 180], [-180, 180], [-180, 180],  # 23
+    ]).to(torch.float32).to(device)
+
     n_markers = points.shape[0]
     n_joints = topology.shape[0]
+    n_params = n_joints * 3 + 3
 
     bind_jgp = bind_jlp.clone()
     for i, pi in enumerate(topology):
@@ -178,7 +179,7 @@ def find_pose(
     else:
         params = torch.zeros(n_params).to(device)
         params[2] = root_height
-        params[3:6] = torch.Tensor([torch.pi / 2, 0, 0]).to(device)
+        # params[3:6] = torch.Tensor([90, 0, 0]).to(device)  # torch.pi / 2
 
     out_n = n_markers * 3
     jacobian = torch.zeros([out_n, n_params]).to(device)
@@ -193,15 +194,17 @@ def find_pose(
     # return params, jgt, virtual_points
 
     for i in range(max_iter):
-        residual, mse = get_residual(topology, jlt, params, points, weights, offsets, mse=True)
+        residual, mse = get_residual(topology, jlt, params, points, weights, offsets, bounds, mse=True)
 
         if abs(mse - last_mse) < mse_threshold:
-            jgt, virtual_points = lbs(topology, jlt, params, weights, offsets)
-            print(f'iter: {i}, mse: {mse}')
+            jgt, virtual_points = lbs(topology, jlt, params, weights, offsets, bounds)
+
+            if verbose:
+                print(verbose_arg + f'iter: {i}, mse: {mse}')
             return params, jgt, virtual_points
 
         for k in range(params.shape[0]):
-            jacobian[:, k] = get_derivative(topology, jlt, params, points, weights, offsets, k, eps)
+            jacobian[:, k] = get_derivative(topology, jlt, params, points, weights, offsets, bounds, k, eps)
 
         jtj = torch.matmul(jacobian.T, jacobian)
         jtj = jtj + u * torch.eye(jtj.shape[0]).to(device)
@@ -220,13 +223,15 @@ def find_pose(
         last_update = update
         last_mse = mse
 
-    jgt, virtual_points = lbs(topology, jlt, params, weights, offsets)
-    print(f'iter: {max_iter}, mse: {last_mse}')
+    jgt, virtual_points = lbs(topology, jlt, params, weights, offsets, bounds)
+
+    if verbose:
+        print(verbose_arg + f'iter: {max_iter}, mse: {last_mse}')
     return params, jgt, virtual_points
 
 
-def get_residual(topology, jlt, params, points, weights, offsets, mse=False):
-    jgt, virtual_points = lbs(topology, jlt, params, weights, offsets)
+def get_residual(topology, jlt, params, points, weights, offsets, bounds, mse=False):
+    jgt, virtual_points = lbs(topology, jlt, params, weights, offsets, bounds)
 
     residual = virtual_points - points
 
@@ -239,27 +244,35 @@ def get_residual(topology, jlt, params, points, weights, offsets, mse=False):
         return residual
 
 
-def get_derivative(topology, jlt, params, points, weights, offsets, k, eps):
+def get_derivative(topology, jlt, params, points, weights, offsets, bounds, k, eps):
     params1 = params.clone()
     params2 = params.clone()
 
     params1[k] += eps
     params2[k] -= eps
 
-    res1 = get_residual(topology, jlt, params1, points, weights, offsets)
-    res2 = get_residual(topology, jlt, params2, points, weights, offsets)
+    res1 = get_residual(topology, jlt, params1, points, weights, offsets, bounds)
+    res2 = get_residual(topology, jlt, params2, points, weights, offsets, bounds)
 
     d = (res1 - res2) / (2 * eps)
 
     return d.ravel()
 
 
-def fk_backup(topology, jlt, params):
+def fk(topology, jlt, params, bounds):
+
     jt = jlt.clone()
     jt[0, :3, 3] = params[:3]
-    # x = params[3:].view(-1, 3)[:, 0]
-    # y = params[3:].view(-1, 3)[:, 1]
-    # z = params[3:].view(-1, 3)[:, 2]
+
+    rot_mat = batch_rodrigues(params[3:].view(-1, 3))
+
+    # torch.max(torch.min(params, bounds[:, 1]), bounds[:, 0])
+    # euler = torch.deg2rad(params[3:].view(-1, 3))
+    # x = euler[:, 0]
+    # y = euler[:, 1]
+    # z = euler[:, 2]
+    # jt = jlt.clone()
+    # jt[0, :3, 3] = params[:3]
     #
     # cos_x, sin_x = torch.cos(x), torch.sin(x)
     # cos_y, sin_y = torch.cos(y), torch.sin(y)
@@ -285,11 +298,6 @@ def fk_backup(topology, jlt, params):
     #
     # rot_mat = torch.matmul(torch.matmul(z_mat, y_mat), x_mat)
 
-    # rot_mat = R.from_euler('xyz',  params.view(-1, 3).cpu().numpy(), degrees=True)
-    # rot_mat = torch.from_numpy(rot_mat)
-
-    rot_mat = batch_rodrigues(params[3:].view(-1, 3))
-
     jt[:, :3, :3] = rot_mat
 
     for i, pi in enumerate(topology):
@@ -302,26 +310,8 @@ def fk_backup(topology, jlt, params):
     return jt
 
 
-def fk(topology, jlt, params):
-    jt = jlt.clone()
-    jt[0, :3, 3] = params[:3]
-
-    rot_mat = batch_rodrigues(params[3:].view(-1, 3))
-
-    jt[:, :3, :3] = rot_mat
-
-    for i, pi in enumerate(topology):
-        if i == 0:
-            assert pi == -1
-            continue
-
-        jt[i] = jt[pi] @ jt[i]
-
-    return jt
-
-
-def lbs(topology, jlt, params, weights, offsets):
-    jgt = fk(topology, jlt, params)
+def lbs(topology, jlt, params, weights, offsets, bounds):
+    jgt = fk(topology, jlt, params, bounds)
 
     points = jgt[None, :, :3, :3] @ offsets[:, :, :, None]
     points = points.squeeze() + jgt[None, :, :3, 3]

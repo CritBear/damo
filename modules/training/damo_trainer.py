@@ -47,19 +47,19 @@ class DamoTrainer:
     def train(self):
         options = self.options
 
-        if options.seed is not None:
-            random.seed(options.seed)
-            np.random.seed(options.seed)
-            torch.manual_seed(options.seed)
-            torch.backends.cudnn.deterministic = True
-            torch.backends.cudnn.benchmark = False
+        # if options.seed is not None:
+        #     random.seed(options.seed)
+        #     np.random.seed(options.seed)
+        #     torch.manual_seed(options.seed)
+        #     torch.backends.cudnn.deterministic = True
+        #     torch.backends.cudnn.benchmark = False
 
         train_dataset = DamoDataset(
             common_dataset_path=options.common_dataset_path,
             dataset_paths=options.train_dataset_paths,
             n_max_markers=options.n_max_markers,
             seq_len=options.seq_len,
-            r_ss_ds_ratio=[0.5, 0.25, 0.25],
+            r_ss_ds_ratio=options.train_data_ratio,
             noise_jitter=True,
             noise_ghost=True,
             noise_occlusion=True,
@@ -307,6 +307,7 @@ class DamoTrainer:
         weights_loss = weights_loss.sum() / mask.sum()
 
         offsets_loss = mse(offsets, offsets_pred)
+        offsets_loss = offsets_loss * weights.unsqueeze(-1)
         offsets_loss = offsets_loss * mask.unsqueeze(2).unsqueeze(3)
         offsets_loss = offsets_loss.sum() / mask.sum()
 

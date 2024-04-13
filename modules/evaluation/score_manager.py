@@ -67,8 +67,8 @@ class ScoreManager:
         return np.mean(dist), np.std(dist)
 
     def save_score(self, path):
-        self.memory['jpe'] = np.hstack(self.memory['jpe'])
-        self.memory['joe'] = np.hstack(self.memory['joe'])
+        self.memory['jpe'] = np.concatenate(self.memory['jpe'], axis=0)
+        self.memory['joe'] = np.concatenate(self.memory['joe'], axis=0)
 
         jpe_mean = np.mean(self.memory['jpe'])
         jpe_std = np.std(self.memory['jpe'])
