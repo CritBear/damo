@@ -59,6 +59,7 @@ def evaluate():
             eval_data_dir = Paths.test_results / 'model_outputs' / f'{model_name}_epc{epoch}_synthetic'
             eval_data_path = eval_data_dir / f'{model_name}_epc{epoch}_synthetic_{dataset}_{noise}.pkl'
 
+            print(f'{dataset} | {noise}')
             with open(eval_data_path, 'rb') as f:
                 eval_data = pickle.load(f)
 
@@ -298,7 +299,7 @@ def worker(
         params, jgt, virtual_points = scipy_find_pose(
             topology, bind_jlp, points[i], weights[i], offsets[i], verbose=True, verbose_arg=f'index: {i}, '
         )
-        if i % 10 == 0:
+        if i % 100 == 0:
             print(f'{i}/{points.shape[0]}')
         result_queue.put((i, params[3:].reshape(-1, 3), jgt))
 
