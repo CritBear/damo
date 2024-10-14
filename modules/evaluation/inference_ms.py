@@ -20,43 +20,13 @@ from scipy.signal import savgol_filter
 from scipy.spatial.transform import Rotation as R
 
 
-class LossMemory:
-    def __init__(self):
-        self.total = 0
-        self.indices = 0
-        self.weights = 0
-        self.offsets = 0
-
-    def add_loss_dict(self, loss_dict):
-        self.total += loss_dict['total'].item()
-        self.indices += loss_dict['indices'].item()
-        self.weights += loss_dict['weights'].item()
-        self.offsets += loss_dict['offsets'].item()
-
-    def write(self, writer, category, epoch):
-        writer.add_scalar(f"{category}/total", self.total, epoch)
-        writer.add_scalar(f"{category}/indices", self.indices, epoch)
-        writer.add_scalar(f"{category}/weights", self.weights, epoch)
-        writer.add_scalar(f"{category}/offsets", self.offsets, epoch)
-
-    def divide(self, value):
-        assert isinstance(value, (int, float))
-        self.total /= value
-        self.indices /= value
-        self.weights /= value
-        self.offsets /= value
-
-    def print(self):
-        print(f'\tt: {self.total:.4f} | i: {self.indices:.4f} | w: {self.weights:.4f} | o: {self.offsets:.6f}')
-
-
 def main():
 
     data_names = [
         "HDM05",
-        "SFU",
-        "MoSh",
-        "SOMA"
+        # "SFU",
+        # "MoSh",
+        # "SOMA"
     ]
 
     noises = [
@@ -65,122 +35,117 @@ def main():
         'jgo',
         'jgos'
     ]
-    model_name = 'damo_240415223638'
-    epoch = '300'
-
-    # for data_name in data_names:
-    #     eval_data_path = Paths.datasets / 'eval' / f'damo_eval_synthetic_{data_name}.pkl'
-    #     with open(eval_data_path, 'rb') as f:
-    #         eval_data = pickle.load(f)
-    #
-    #     for noise in noises:
-    #         inference_synthetic(data_name, noise, eval_data, model_name, epoch)
+    model_name = 'damo_240412022202'
+    epoch = '100'
 
     for data_name in data_names:
-        eval_data_path = Paths.datasets / 'eval' / f'damo_eval_real_{data_name}.pkl'
-        with open(eval_data_path, 'rb') as f:
-            eval_data = pickle.load(f)
-
-        inference_real(data_name, eval_data, model_name, epoch)
+        for noise in noises:
+            inference_synthetic(data_name, noise, model_name, epoch)
 
 
-def inference_synthetic(data_name, noise, eval_data, model_name, epoch):
+
+def inference_synthetic(data_name, noise, model_name, epoch):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     cpu = torch.device('cpu')
 
-    model_dir = Paths.trained_models / 'seraph' / model_name
-    # model_dir = Paths.trained_models / model_name
+    # model_dir = Paths.trained_models / 'seraph' / model_name
+    model_dir = Paths.trained_models / model_name
     model_path = model_dir / f'{model_name}_epc{epoch}.pt'
     options_path = model_dir / 'options.json'
     options = load_options_from_json_for_inference(options_path)
 
     print(f'{model_name}_{epoch} | {data_name} | {noise}')
 
+    eval_data_path = Paths.datasets / 'eval' / 'legacy' / 'eval_data_for_ms' / 'all_ref_idx' / f'eval_data_ms_{data_name}_{noise}_ARI.pkl'
+    with open(eval_data_path, 'rb') as f:
+        eval_data = pickle.load(f)
+
+    # print(eval_data['synthetic_marker'][0].shape)
+    # print(eval_data['synthetic_marker_num'][0].shape)
+    # print(eval_data['joint_local_rotations'][0].shape)
+    # print(eval_data['joint_global_rotations'][0].shape)
+    # print(eval_data['joint_local_positions'][0].shape)
+    # print(eval_data['joint_global_positions'][0].shape)
+
+    results = {
+        'points_seq': [],
+        'indices': [],
+        'weights': [],
+        'offsets': [],
+        'jlr': [],
+        'jgp': [],
+        'bind_jlp': [],
+        'body_idx': []
+    }
+
     model = Damo(options).to(device)
-    # model.load_state_dict(torch.load(model_path))
-    ddp_state_dict = {key.replace('module.', ''): value for key, value in torch.load(model_path).items()}
-    model.load_state_dict(ddp_state_dict)
+    model.load_state_dict(torch.load(model_path))
+    # ddp_state_dict = {key.replace('module.', ''): value for key, value in torch.load(model_path).items()}
+    # model.load_state_dict(ddp_state_dict)
     model.eval()
-
-    # print(sum(p.numel() for p in model.parameters() if p.requires_grad))
-
-    output_dir = Paths.test_results / 'model_outputs' / f'{model_name}_epc{epoch}_synthetic'
+    output_dir = Paths.test_results / 'model_outputs' / f'{model_name}_epc{epoch}_lsynthetic'
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    n_files = len(eval_data[noise]['points_seq'])
+    n_files = len(eval_data['synthetic_marker'])
 
     batch_size = options.batch_size
     n_max_markers = options.n_max_markers
     seq_len = options.seq_len
 
-    eval_data[noise]['indices'] = []
-    eval_data[noise]['weights'] = []
-    eval_data[noise]['offsets'] = []
-
-    loss = LossMemory()
     loss_count = 0
 
     with torch.no_grad():
         for fi in range(n_files):
-            batch_loss = LossMemory()
-            file_points_seq = torch.from_numpy(eval_data[noise]['points_seq'][fi]).to(device)
-            file_points_mask = torch.from_numpy(eval_data[noise]['points_mask'][fi]).to(device)
-            file_indices = torch.from_numpy(eval_data[noise]['m_j_weights'][fi]).to(device)
-            file_weights = torch.from_numpy(eval_data[noise]['m_j3_weights'][fi]).to(device)
-            file_offsets = torch.from_numpy(eval_data[noise]['m_j3_offsets'][fi]).to(device)
+            file_points_seq = torch.from_numpy(eval_data['synthetic_marker'][fi]).to(device)
 
             n_frames = file_points_seq.shape[0]
 
+            points_list = []
             indices_list = []
             weights_list = []
             offsets_list = []
 
+            results['jgp'].append(eval_data['joint_global_positions'][fi])
+            results['jlr'].append(eval_data['joint_local_rotations'][fi])
+            results['bind_jlp'].append(eval_data['joint_local_positions'][fi])
+            results['body_idx'].append(eval_data['body_shape_index'][fi])
+
             for bi in range(n_frames // batch_size):
                 print(f"\rInfer... [{fi + 1}/{n_files}][{bi + 1}/{n_frames // batch_size}]", end='')
+                padded_points = np.zeros((batch_size, 7, 90, 3))
+                mask = np.zeros((batch_size, 7, 90))
 
-                points_seq = file_points_seq[bi*batch_size:(bi+1)*batch_size]
-                points_mask = file_points_mask[bi*batch_size:(bi+1)*batch_size]
-                indices = file_indices[bi*batch_size:(bi+1)*batch_size]
-                weights = file_weights[bi*batch_size:(bi+1)*batch_size]
-                offsets = file_offsets[bi*batch_size:(bi+1)*batch_size]
+                for b in range(batch_size):
+                    for s in range(-3, 4):
+                        f = bi * batch_size + b + s
+                        if f >= 0 and f < n_frames:
+                            n_synthetic_markers = int(eval_data['synthetic_marker_num'][fi][f])
+                            points = eval_data['synthetic_marker'][fi][f, :n_synthetic_markers, :]
+                            mag = np.linalg.norm(points, axis=1)
+                            filtered_points = points[mag > 0.001]
 
-                indices_pred, weights_pred, offsets_pred = model(points_seq, points_mask)
+                            n_rvm = min(filtered_points.shape[0], 90)
 
-                output_mask = points_mask[:, options.seq_len // 2, :]
+                            padded_points[b, s, :n_rvm, :] = filtered_points[:n_rvm, :]
+                            mask[b, s, :n_rvm] = 1
 
-                loss_dict = loss_type_1(
-                    indices=indices,
-                    indices_pred=indices_pred,
-                    weights=weights,
-                    weights_pred=weights_pred,
-                    offsets=offsets,
-                    offsets_pred=offsets_pred,
-                    mask=output_mask
-                )
-                loss.add_loss_dict(loss_dict)
-                batch_loss.add_loss_dict(loss_dict)
+                padded_points = torch.from_numpy(padded_points).to(options.device).to(torch.float32)
+                mask = torch.from_numpy(mask).to(options.device).to(torch.float32)
+                indices_pred, weights_pred, offsets_pred = model(padded_points, mask)
 
                 indices_list.append(indices_pred)
                 weights_list.append(weights_pred)
                 offsets_list.append(offsets_pred)
+                points_list.append(padded_points)
 
-            loss_count += n_frames // batch_size
-
-            eval_data[noise]['indices'].append(torch.cat(indices_list, dim=0).cpu().numpy())
-            eval_data[noise]['weights'].append(torch.cat(weights_list, dim=0).cpu().numpy())
-            eval_data[noise]['offsets'].append(torch.cat(offsets_list, dim=0).cpu().numpy())
-
-            batch_loss.divide(n_frames // batch_size)
-            batch_loss.print()
-
-        print('\nTotal_____________________')
-        loss.divide(loss_count)
-        loss.print()
-        print('\n')
+            results['indices'].append(torch.cat(indices_list, dim=0).cpu().numpy())
+            results['weights'].append(torch.cat(weights_list, dim=0).cpu().numpy())
+            results['offsets'].append(torch.cat(offsets_list, dim=0).cpu().numpy())
+            results['points_seq'].append(torch.cat(points_list, dim=0).cpu().numpy())
 
     output_path = output_dir / f'{model_name}_epc{epoch}_{data_name}_{noise}.pkl'
     with open(output_path, 'wb') as f:
-        pickle.dump(eval_data[noise], f)
+        pickle.dump(results, f)
 
 
 def inference_real(data_name, eval_data, model_name, epoch):

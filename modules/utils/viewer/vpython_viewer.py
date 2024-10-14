@@ -213,7 +213,7 @@ class VpythonViewer(DamoViewer):
                 self.joe_label.text = 'joe: ' + str(round(np.mean(joe[f]), 2))
                 for j in range(self.n_joints):
                     self.joe_each_label[j].pos = self.v_joints[j].pos
-                    self.joe_each_label[j].text = str(round(joe[f, j], 2))
+                    # self.joe_each_label[j].text = str(round(joe[f, j], 2))
 
             if view_local_space:
                 for j in range(self.n_joints):

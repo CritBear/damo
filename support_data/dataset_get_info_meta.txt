@@ -1,0 +1,8 @@
+joint_hierarchy	        shape: (22,)
+vertex_joint_weights	shape: (6890, 22)
+j_marker_indices	    len: 22
+superset_variation	    len: 86
+init_vertices	        shape: (1700, 6890, 3)
+init_vertices_normal	shape: (1700, 6890, 3)
+init_joint_global_position	shape: (1700, 22, 3)
+init_joint_local_position	shape: (1700, 22, 3)

@@ -270,6 +270,8 @@ class DamoDataset(Dataset):
         padded_m_j3_weights = None
         padded_m_j3_offsets = None
 
+        print(len(data['markers']))
+
         for _ in range(sc):
             points_seq.append(torch.zeros(1, self.n_max_markers, 3))
             points_mask.append(torch.zeros(1, self.n_max_markers, requires_grad=False))

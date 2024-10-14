@@ -16,6 +16,35 @@ class ScoreManager:
             'vpe': []
         }
 
+    def calc_error_use_outer(self, jgp, gt_jgp, joe_result, vgp=None, gt_vgp=None):
+        jpe = self.calc_jpe(jgp, gt_jgp)
+        self.memory['jpe'].append(jpe)
+        jpe_mean, jpe_std = jpe.mean(), jpe.std()
+        print(f'JPE: {jpe_mean:.2f} ± {jpe_std:.2f}')
+
+        self.memory['joe'].append(joe_result)
+        joe_mean, joe_std = joe_result.mean(), joe_result.std()
+        print(f'JOE: {joe_mean:.2f} ± {joe_std:.2f}')
+
+        vpe_mean = None
+        vpe_std = None
+        if vgp is not None:
+            assert gt_vgp is not None
+            vpe_mean, vpe_std = self.calc_vpe(vgp, gt_vgp)
+            print(f'VPE: {vpe_mean:.2f} ± {vpe_std:.2f}')
+
+
+        self.memory['motion_mean_std'].append(
+            {
+                'jpe_mean': jpe_mean,
+                'jpe_std': jpe_std,
+                'joe_mean': joe_mean,
+                'joe_std': joe_std,
+                'vpe_mean': vpe_mean,
+                'vpe_std': vpe_std
+            }
+        )
+
     def calc_error(self, jgp, gt_jgp, jlr, gt_jlr, vgp=None, gt_vgp=None):
         jpe_mean, jpe_std = self.calc_jpe(jgp, gt_jgp)
         print(f'JPE: {jpe_mean:.2f} ± {jpe_std:.2f}')
@@ -44,9 +73,11 @@ class ScoreManager:
     def calc_jpe(self, jgp, gt_jgp):
         dist = np.sqrt(np.sum((jgp - gt_jgp) ** 2, axis=-1))
         dist *= 1000
-        self.memory['jpe'].append(dist)
 
-        return np.mean(dist), np.std(dist)
+        return dist
+        # self.memory['jpe'].append(dist)
+        #
+        # return np.mean(dist), np.std(dist)
 
     def calc_joe(self, jlr, gt_jlr):
         f, j, _, _ = jlr.shape

@@ -181,16 +181,16 @@ def to_gpu(ndarray):
 
 def evaluate():
     eval_dataset = {
-        'HDM05': False,
-        'SFU': True,
-        'Mosh': True,
-        'SOMA': True
+        'HDM05': True,
+        'SFU': False,
+        'Mosh': False,
+        'SOMA': False
     }
 
     eval_noise = {
-        'j': False,
-        'jg': False,
-        'jgo': False,
+        'j': True,
+        'jg': True,
+        'jgo': True,
         'jgos': True,
         'real': False
     }
@@ -206,33 +206,24 @@ def evaluate():
             if not do_noise:
                 continue
 
-            if noise == 'real':
-                eval_data_dir = Paths.test_results / 'model_outputs' / f'{model_name}_epc{epoch}_synthetic'
-                eval_data_path = eval_data_dir / f'{model_name}_epc{epoch}_{dataset}_{noise}.pkl'
+            eval_data_dir = Paths.test_results / 'model_outputs' / f'{model_name}_epc{epoch}_lsynthetic'
+            eval_data_path = eval_data_dir / f'{model_name}_epc{epoch}_{dataset}_{noise}.pkl'
 
-                print(f'{dataset} | {noise}')
-                with open(eval_data_path, 'rb') as f:
-                    eval_data = pickle.load(f)
+            print(f'{dataset} | {noise}')
+            with open(eval_data_path, 'rb') as f:
+                eval_data = pickle.load(f)
 
-                evaluate_entry(eval_data, dataset, noise, model_name, epoch)
-            else:
-                eval_data_dir = Paths.test_results / 'model_outputs' / f'{model_name}_epc{epoch}_synthetic'
-                eval_data_path = eval_data_dir / f'{model_name}_epc{epoch}_{dataset}_{noise}.pkl'
-
-                print(f'{dataset} | {noise}')
-                with open(eval_data_path, 'rb') as f:
-                    eval_data = pickle.load(f)
-
-                evaluate_entry(eval_data, dataset, noise, model_name, epoch)
+            evaluate_entry(eval_data, dataset, noise, model_name, epoch)
 
 
 def evaluate_entry(eval_data, dataset, noise, model_name, epoch):
-    visualize = False
-    generate_figure_data = False
+    visualize = True
+    generate_figure_data = True
     position_smoothing = True
     rotation_smoothing = True
-    pre_motion_idx = 20
-    pre_n_frames = [0.5, 100]
+    pre_motion_idx = 8
+    pre_n_frames = None
+    # pre_n_frames = [0, 50]
 
     common_data_path = Paths.datasets / 'common' / f'damo_common_20240329.pkl'
 
@@ -257,6 +248,19 @@ def evaluate_entry(eval_data, dataset, noise, model_name, epoch):
     smplh_neutral = dict2class(smplh_neutral)
     base_bind_jgp = to_gpu(smplh_neutral.J)
 
+    if generate_figure_data:
+        visualization_data_path = Paths.test_results / 'figure_data' / f'{model_name}_epc{epoch}_lsynthetic_{dataset}_{noise}_{pre_motion_idx}.pkl'
+        visualization_data = {
+            'marker_positions': [],  # [ (n_frames, n_max_markers, 3) ]
+            'body_shape_index': [],  # [ int ]
+            'init_vertices': [],  # [ (n_vertices, 3) ]
+            'joint_global_transform': [],  # [ (n_frames, n_joints, 4, 4) ]
+            'smooth_joint_global_transform': [],  # [ (n_frames, n_joints, 4, 4) ]
+            'marker_indices': [],  # [ [n_markers] ]
+            'weight': [],  # [ (n_frames, n_max_markers, n_joints + 1) ]
+            'offset': [],  # [ (n_frames, n_max_markers, n_joints + 1, 3) ]
+        }
+
     n_motions = len(eval_data['indices'])
     for motion_idx in range(pre_motion_idx, n_motions):
         # if pre_motion_idx != -1:
@@ -279,11 +283,25 @@ def evaluate_entry(eval_data, dataset, noise, model_name, epoch):
 
         points = points[:n_frames]
 
-        gt_jgp = to_gpu(eval_data['jgp'][motion_idx][:n_frames])
-        poses = to_gpu(eval_data['poses'][motion_idx])
-        gt_jlr = batch_rodrigues(poses.view(-1, n_joints, 3)[:n_frames].view(-1, 3)).view(n_frames, n_joints, 3, 3)
-        gt_bind_jgp = to_gpu(eval_data['bind_jgp'][motion_idx])
-        gt_bind_jlp = to_gpu(eval_data['bind_jlp'][motion_idx])
+        gt_jgp = np.zeros((n_frames, n_joints, 3))
+        gt_jgp[:, :22] = eval_data['jgp'][motion_idx][:n_frames]
+        gt_jgp = to_gpu(gt_jgp)
+        # poses = to_gpu(eval_data['poses'][motion_idx])
+
+        gt_jlr = np.zeros((n_frames, n_joints, 3, 3))
+        gt_jlr[:, :, 0, 0] = 1
+        gt_jlr[:, :, 1, 1] = 1
+        gt_jlr[:, :, 2, 2] = 1
+        gt_jlr[:, :22] = eval_data['jlr'][motion_idx][:n_frames]
+        gt_jlr = to_gpu(gt_jlr)
+        # gt_jlr = to_gpu(eval_data['jlr'][motion_idx][:n_frames])
+        # gt_jlr = batch_rodrigues(poses.view(-1, n_joints, 3)[:n_frames].view(-1, 3)).view(n_frames, n_joints, 3, 3)
+        # gt_bind_jgp = to_gpu(eval_data['bind_jgp'][motion_idx])
+
+        gt_bind_jlp = np.zeros((n_joints, 3))
+        gt_bind_jlp[:22] = eval_data['bind_jlp'][motion_idx]
+        gt_bind_jlp = to_gpu(gt_bind_jlp)
+        # gt_bind_jlp = to_gpu(eval_data['bind_jlp'][motion_idx])
 
         j3_indices = torch.argsort(indices, dim=-1, descending=True)[..., :3]  # [f, m, 3]
         j_weights = torch.zeros(n_frames, n_max_markers, n_joints + 1).to(device)  # [f, m, j+1]
@@ -439,6 +457,17 @@ def evaluate_entry(eval_data, dataset, noise, model_name, epoch):
         jpe = score_manager.memory['jpe'][-1]
         joe = score_manager.memory['joe'][-1]
 
+        if generate_figure_data:
+            visualization_data['marker_positions'].append(points)
+            visualization_data['joint_global_transform'].append(jgt_seq)
+            visualization_data['body_shape_index'].append(eval_data['body_idx'][motion_idx])
+            visualization_data['init_vertices'].append(common_data['caesar_bind_v'][eval_data['body_idx'][motion_idx]])
+            visualization_data['weight'].append(j_weights)
+            visualization_data['offset'].append(j_offsets)
+
+            with open(visualization_data_path, 'wb') as f:
+                pickle.dump(visualization_data, f)
+
         if visualize:
             viewer.visualize(
                 markers_seq=points[start_frame:start_frame + n_frames],
@@ -460,6 +489,8 @@ def evaluate_entry(eval_data, dataset, noise, model_name, epoch):
                 # ja_offset=ja_offset[:, :, :n_joints, :],
                 # init_joint=init_joint
             )
+
+
 
         # Debug_________________________
         if pre_motion_idx != -1:

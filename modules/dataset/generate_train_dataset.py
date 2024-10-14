@@ -44,7 +44,34 @@ def to_gpu(ndarray):
 
 def generate_dataset():
     # raw_data_dirs = ['CMU', 'SFU']
-    raw_data_dirs = ['HDM05', 'SFU', 'MoSh', 'SOMA']  # 'PosePrior', 'HDM05', 'SOMA', 'DanceDB',
+    raw_data_dirs = ['CMU', 'ACCAD', 'PosePrior', 'DanceDB']  # 'PosePrior', 'HDM05', 'SOMA', 'DanceDB', 'SFU', 'MoSh', 'SOMA'
+
+    total_motion_sum = 0
+    total_frame_sum = 0
+    for dataset_name in raw_data_dirs:
+        data_dir = Paths.datasets / 'raw' / dataset_name
+        npz_files = list(data_dir.rglob('*.npz'))
+
+        print(f'{dataset_name} | {len(npz_files)} files | ', end='')
+        total_motion_sum += len(npz_files)
+        frame_sum = 0
+        for npz_file in npz_files:
+            amass = np.load(npz_file, allow_pickle=True)
+
+            try:
+                frames = amass['poses'].shape[0]
+                frame_sum += frames
+            except KeyError:
+                print(list(amass.keys()))
+
+        total_frame_sum += frame_sum
+        print(frame_sum)
+
+    print(total_motion_sum)
+    print(total_frame_sum)
+    return
+
+
     save_batch_file = True
     print(f"save batch file: {save_batch_file}")
 

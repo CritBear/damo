@@ -1,0 +1,6 @@
+marker_sets                 (1000, 87)
+joint_table                 (2, 52)
+weights                     (6890, 52)
+init_vertices_list          (1700, 6890, 3)
+init_joint_list             (1700, 52, 3)
+init_vertex_normals_list    (1700, 6890, 3)

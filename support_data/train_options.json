@@ -1,0 +1,30 @@
+{
+  "model_name": "damo",
+  "model_comment": "",
+  "train_dataset_names": ["ACCAD", "PosePrior", "CMU"],
+  "test_dataset_names": ["HDM05", "SFU", "MoSh", "SOMA"],
+  "train_data_ratio": [0.5, 0.25, 0.25],
+  "dataset_date": "20240329",
+  "load_batch_data": true,
+
+  "n_joints": 24,
+  "n_max_markers": 90,
+  "seq_len": 7,
+  "d_model": 125,
+  "d_hidden": 128,
+  "n_layers": 4,
+  "n_heads": 5,
+
+  "use_model_load": false,
+  "loading_model_name": "damo_240404153143",
+  "loading_model_epoch": 130,
+
+  "seed": 2024,
+  "n_epochs": 300,
+  "lr": 1e-5,
+  "batch_size": 64,
+  "test_epoch_step": 10,
+  "test_sample_step": 10,
+
+  "device": "cuda"
+}

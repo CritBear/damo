@@ -1,0 +1,36 @@
+{
+    "model_name": "damo_240326103431",
+    "model_comment": "",
+    "dataset_names": [
+        "SFU"
+    ],
+    "dataset_date": "20240325",
+    "n_joints": "24",
+    "n_max_markers": "90",
+    "seq_len": "7",
+    "d_model": "125",
+    "d_hidden": "128",
+    "n_layers": "4",
+    "n_heads": "5",
+    "seed": "2024",
+    "n_epochs": "200",
+    "lr": "1e-05",
+    "batch_size": "64",
+    "test_epoch_step": "10",
+    "test_sample_step": "10",
+    "use_wandb": "False",
+    "wandb_login_key": "",
+    "wandb_note": "",
+    "wand_project_name": "",
+    "device": "cuda-dist",
+    "common_dataset_path": "D:\\Projects\\DAMO\\damo\\datasets\\common\\damo_common_20240325.pkl",
+    "train_dataset_paths": [
+        "D:\\Projects\\DAMO\\damo\\datasets\\train\\damo_train_20240325_SFU.pkl"
+    ],
+    "test_dataset_paths": [
+        "D:\\Projects\\DAMO\\damo\\datasets\\test\\damo_test_20240325_SFU.pkl"
+    ],
+    "start_time": "240326103431",
+    "model_dir": "D:\\Projects\\DAMO\\damo\\trained_models\\damo_240326103431",
+    "log_dir": "D:\\Projects\\DAMO\\damo\\trained_models\\damo_240326103431\\logs"
+}
