@@ -1,0 +1,67 @@
+seed: 2024
+cpu_threads: 4
+data_root: ../data/cache
+common: ../data/cache/common/native_base.npz
+model:
+  n_joints: 22
+  n_max_markers: 90
+  seq_len: 7
+  d_model: 125
+  d_hidden: 128
+  n_layers: 4
+  n_heads: 5
+  attention_mode: center
+  mask_centered_inputs: true
+  joint_distribution: softmax
+  normalization: batch
+dataset:
+  date: fixed_bind
+  train_names: &id001
+  - ACCAD
+  - CMU
+  - DanceDB
+  - HDM05
+  - PosePrior
+  - SFU
+  - SOMA
+  val_names: *id001
+  test_names: []
+  split_manifest: split.json
+  samples_per_clip: 32
+  val_samples_per_clip: 32
+  ratios:
+  - 0.5
+  - 0.0
+  - 0.5
+  val_modes:
+  - real
+  style: legacy
+  joint_policy: native
+  sampling: frame_uniform
+  mirror_probability: 0.5
+  cache_size: 2
+  fast_synthetic: true
+  train_samples_per_epoch: 155008
+training:
+  epochs: 300
+  batch_size: 32
+  num_workers: 4
+  lr: 0.001
+  loss: legacy
+  weight_decay: 0.0
+  grad_clip: 1.0
+  selection: dataset_macro_validation_total
+  scheduler: plateau
+  min_lr: 1.0e-05
+  save_every: 25
+  plateau_factor: 0.5
+  plateau_patience: 8
+  plateau_threshold: 0.0001
+  early_stopping:
+    patience: 30
+    min_delta: 0.0001
+    min_epochs: 50
+output_dir: ../runs/baseline
+initialization:
+  untrained: true
+  seed: 2024

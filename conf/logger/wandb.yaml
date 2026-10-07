@@ -1,5 +1,0 @@
-_target_: damo.logger.wandb_logger.WandbLogger
-project: damo
-run_name: ${now:%Y%m%d_%H%M%S}_${model.name}
-mode: online
-resume: never
